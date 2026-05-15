@@ -12,25 +12,25 @@ A self-hosted network security monitoring system with IDS, threat intelligence, 
 - Generates weekly statistical reports using R
 
 ## Architecture
-[Kali Attacker VM] ──attack──▶ [Rocky Linux Target VM]
-│
-logs pulled
-│
-▼
-[Ubuntu Monitor VM]
-┌─────────────────────┐
-│  Python Pipeline    │
-│  - Log Collector    │
-│  - Attack Detector  │
-│  - Threat Intel     │
-│  - Auto-Ban         │
-│  - Alert System     │
-└─────────────────────┘
-│
-┌─────────────────────┐
-│  Java Dashboard     │
-│  R Analysis Reports │
-└─────────────────────┘
+[Kali Attacker VM] ──attack──▶ [Rocky Linux Target VM]<br>
+│<br>
+logs pulled<br>
+│<br>
+▼<br>
+[Ubuntu Monitor VM]<br>
+┌─────────────────────┐<br>
+│  Python Pipeline    │<br>
+│  - Log Collector    │<br>
+│  - Attack Detector  │<br>
+│  - Threat Intel     │<br>
+│  - Auto-Ban         │<br>
+│  - Alert System     │<br>
+└─────────────────────┘<br>
+│<br>
+┌─────────────────────┐<br>
+│  Java Dashboard     │<br>
+│  R Analysis Reports │<br>
+└─────────────────────┘<br>
 
 
 
