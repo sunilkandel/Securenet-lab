@@ -3,8 +3,19 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+
+*.iml
+
 # C extensions
 *.so
+
+
+#Sensitive config
+config.env
+*.key
+*.pem
+*.secret
+
 
 # Distribution / packaging
 .Python
@@ -60,6 +71,28 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+
+# Logs and runtime data
+logs/
+data/
+*.json.bak
+
+
+# Java / Maven
+dashboard/target/
+dashboard/.mvn/
+*.class
+*.jar
+
+# R
+.Rhistory
+.Rdata
+.Rproj.user/
+analysis/reports/*.pdf
+
+# OS files
+.DS_Store
+Thumbs.db
 
 # Flask stuff:
 instance/
@@ -186,7 +219,7 @@ cython_debug/
 #   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
 #   and can be added to the global gitignore or merged into this file.  For a more nuclear
 #   option (not recommended) you can uncomment the following to ignore the entire idea folder.
-# .idea/
+.idea/
 
 # Abstra
 #   Abstra is an AI-powered process automation framework.
@@ -199,7 +232,9 @@ cython_debug/
 #   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
 #   and can be added to the global gitignore or merged into this file. However, if you prefer, 
 #   you could uncomment the following to ignore the entire vscode folder
-# .vscode/
+.vscode/
+
+
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
