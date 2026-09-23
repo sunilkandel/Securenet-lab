@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.chart.BarChart?>
+<?import javafx.scene.chart.CategoryAxis?>
+<?import javafx.scene.chart.LineChart?>
+<?import javafx.scene.chart.NumberAxis?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.TableColumn?>
+<?import javafx.scene.control.TableView?>
+<?import javafx.scene.layout.BorderPane?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.VBox?>
+
+<BorderPane xmlns="http://javafx.com/javafx/11" xmlns:fx="http://javafx.com/fxml/1"
+            fx:controller="com.securenet.dashboard.DashboardController"
+            styleClass="root-pane">
+  <top>
+    <HBox styleClass="header" spacing="14" alignment="CENTER_LEFT">
+      <Label text="SecureNet Lab" styleClass="title"/>
+      <Label fx:id="status" text="starting..." styleClass="status"/>
+    </HBox>
+  </top>
+  <center>
+    <VBox spacing="14">
+      <padding><Insets top="4" right="20" bottom="20" left="20"/></padding>
+
+      <HBox spacing="14">
+        <VBox styleClass="card" HBox.hgrow="ALWAYS" maxWidth="Infinity">
+          <Label fx:id="totalEvents" text="-" styleClass="card-value"/>
+          <Label text="Total events" styleClass="card-label"/>
+        </VBox>
+        <VBox styleClass="card" HBox.hgrow="ALWAYS" maxWidth="Infinity">
+          <Label fx:id="activeBans" text="-" styleClass="card-value"/>
+          <Label text="Active bans" styleClass="card-label"/>
+        </VBox>
+        <VBox styleClass="card" HBox.hgrow="ALWAYS" maxWidth="Infinity">
+          <Label fx:id="uniqueAttackers" text="-" styleClass="card-value"/>
+          <Label text="Unique attackers" styleClass="card-label"/>
+        </VBox>
+        <VBox styleClass="card" HBox.hgrow="ALWAYS" maxWidth="Infinity">
+          <Label fx:id="lastEvent" text="-" styleClass="card-value"/>
+          <Label text="Last event" styleClass="card-label"/>
+        </VBox>
+      </HBox>
+
+      <HBox spacing="14" VBox.vgrow="ALWAYS">
+        <VBox styleClass="panel" HBox.hgrow="ALWAYS">
+          <Label text="EVENTS PER DAY (14D)" styleClass="panel-title"/>
+          <LineChart fx:id="timeline" legendVisible="false" animated="false" VBox.vgrow="ALWAYS">
+            <xAxis><CategoryAxis/></xAxis>
+            <yAxis><NumberAxis minorTickVisible="false" forceZeroInRange="true"/></yAxis>
+          </LineChart>
+        </VBox>
+        <VBox styleClass="panel" prefWidth="440">
+          <Label text="TOP ATTACKERS" styleClass="panel-title"/>
+          <BarChart fx:id="attackersChart" legendVisible="false" animated="false" VBox.vgrow="ALWAYS">
+            <xAxis><NumberAxis minorTickVisible="false" forceZeroInRange="true"/></xAxis>
+            <yAxis><CategoryAxis/></yAxis>
+          </BarChart>
+        </VBox>
+      </HBox>
+
+      <HBox spacing="14" VBox.vgrow="ALWAYS">
+        <VBox styleClass="panel" HBox.hgrow="ALWAYS">
+          <Label text="RECENT EVENTS" styleClass="panel-title"/>
+          <TableView fx:id="eventsTable" VBox.vgrow="ALWAYS">
+            <columns>
+              <TableColumn fx:id="evTime" text="Time" prefWidth="150"/>
+              <TableColumn fx:id="evIp" text="Source IP" prefWidth="130"/>
+              <TableColumn fx:id="evType" text="Type" prefWidth="170"/>
+              <TableColumn fx:id="evSeverity" text="Severity" prefWidth="80"/>
+              <TableColumn fx:id="evMitre" text="MITRE" prefWidth="90"/>
+            </columns>
+            <columnResizePolicy><TableView fx:constant="CONSTRAINED_RESIZE_POLICY"/></columnResizePolicy>
+            <placeholder><Label text="no events yet"/></placeholder>
+          </TableView>
+        </VBox>
+        <VBox styleClass="panel" prefWidth="560">
+          <Label text="ACTIVE BANS" styleClass="panel-title"/>
+          <TableView fx:id="bansTable" VBox.vgrow="ALWAYS">
+            <columns>
+              <TableColumn fx:id="banIp" text="IP" prefWidth="120"/>
+              <TableColumn fx:id="banReason" text="Reason" prefWidth="170"/>
+              <TableColumn fx:id="banSince" text="Banned at" prefWidth="130"/>
+              <TableColumn fx:id="banExpires" text="Expires" prefWidth="130"/>
+            </columns>
+            <columnResizePolicy><TableView fx:constant="CONSTRAINED_RESIZE_POLICY"/></columnResizePolicy>
+            <placeholder><Label text="no active bans"/></placeholder>
+          </TableView>
+        </VBox>
+      </HBox>
+    </VBox>
+  </center>
+</BorderPane>

@@ -93,7 +93,7 @@ logs pulled<br>
 - [x] Phase 3 — Suricata IDS
 - [x] Phase 4 — Threat Intelligence + Auto-Ban
 - [x] Phase 5 — Alert System
-- [ ] Phase 6 — Java Dashboard
+- [x] Phase 6 — Java Dashboard
 - [ ] Phase 7 — R Analysis
 - [ ] Phase 8 — Integration
 
