@@ -19,6 +19,7 @@ rotation), we assume it was replaced and read the new file from the top.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -43,8 +44,8 @@ except ImportError:  # paramiko is optional for offline tests
 class LogRecord:
     """One parsed log line, normalized enough for detection.
 
-    `kind` is "apache" or "sshd". Fields not relevant to the source are
-    left at their defaults.
+    `kind` is "apache", "sshd" or "suricata". Fields not relevant to the
+    source are left at their defaults.
     """
     kind: str
     source_ip: str
@@ -58,6 +59,14 @@ class LogRecord:
     user: str = ""
     action: str = ""          # "failed", "accepted", "invalid_user", ...
     raw: str = ""
+    # suricata (eve.json); action holds the EVE type: "alert" or "flow"
+    dest_ip: str = ""
+    dest_port: int = 0
+    signature: str = ""
+    signature_id: int = 0
+    category: str = ""
+    ids_severity: int = 0     # Suricata: 1 = high, 2 = medium, 3 = low
+    mitre_technique: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +215,89 @@ def parse_sshd_line(line: str) -> LogRecord | None:
 
 
 # ---------------------------------------------------------------------------
+# Suricata EVE JSON parsing
+# ---------------------------------------------------------------------------
+
+# Only these EVE record types carry detection value here: "alert" is a
+# rule hit, "flow" is one connection (feeds port-scan counting). http,
+# dns, tls, stats and the rest are dropped at the door.
+_EVE_TYPES = {"alert", "flow"}
+
+
+def _parse_eve_timestamp(raw: str) -> datetime | None:
+    """Parse Suricata's '2026-10-11T06:26:40.050000+0000' (tz-aware)."""
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def parse_eve_line(line: str) -> LogRecord | None:
+    """Parse one line of Suricata eve.json (one JSON object per line).
+
+    Returns a "suricata" LogRecord for alert and flow records and None
+    for anything else. Never raises: a half-written last line from a
+    read that raced Suricata's writer is normal, not an error.
+    """
+    try:
+        data = json.loads(line)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    kind = data.get("event_type")
+    ip = data.get("src_ip")
+    if kind not in _EVE_TYPES or not isinstance(ip, str) or not ip:
+        return None
+
+    try:
+        dest_port = int(data.get("dest_port") or 0)
+    except (ValueError, TypeError):
+        dest_port = 0
+
+    rec = LogRecord(
+        kind="suricata",
+        source_ip=ip,
+        timestamp=_parse_eve_timestamp(data.get("timestamp", "")),
+        action=kind,
+        dest_ip=str(data.get("dest_ip") or ""),
+        dest_port=dest_port,
+        raw=line.strip(),
+    )
+
+    if kind == "alert":
+        alert = data.get("alert")
+        if not isinstance(alert, dict):
+            return None
+        try:
+            rec.signature_id = int(alert.get("signature_id") or 0)
+            rec.ids_severity = int(alert.get("severity") or 0)
+        except (ValueError, TypeError):
+            return None
+        rec.signature = str(alert.get("signature") or "")
+        rec.category = str(alert.get("category") or "")
+        # rule "metadata: mitre_technique T1110;" -> {"mitre_technique": ["T1110"]}
+        meta = alert.get("metadata")
+        if isinstance(meta, dict):
+            techniques = meta.get("mitre_technique")
+            if isinstance(techniques, list) and techniques:
+                rec.mitre_technique = str(techniques[0])
+    return rec
+
+
+def _parser_for(path: str) -> Callable[[str], LogRecord | None]:
+    """Pick the parser for a remote log file from its path."""
+    if path.endswith(".json") or "suricata" in path:
+        return parse_eve_line
+    if "apache" in path or "access" in path:
+        return parse_apache_line
+    return parse_sshd_line
+
+
+# ---------------------------------------------------------------------------
 # SSH transport
 # ---------------------------------------------------------------------------
 
@@ -214,6 +306,10 @@ class _RemoteFile:
     """Tracks read progress through one remote log file."""
     path: str
     offset: int = 0
+    # Skip the file's existing contents on the first poll. Used for
+    # eve.json, which is large and mostly old history when we connect.
+    start_at_end: bool = False
+    primed: bool = False
 
 
 class SSHLogCollector:
@@ -235,13 +331,12 @@ class SSHLogCollector:
         self.user = user or settings.ssh_user
         self.key_path = key_path or settings.ssh_key_path
         self.port = port or settings.ssh_port
-        self.files = [
-            _RemoteFile(p)
-            for p in (
-                log_paths
-                or [settings.apache_log_path, settings.sshd_log_path]
+        paths = log_paths or [settings.apache_log_path, settings.sshd_log_path]
+        self.files = [_RemoteFile(p) for p in paths]
+        if log_paths is None and settings.suricata_enabled:
+            self.files.append(
+                _RemoteFile(settings.suricata_eve_path, start_at_end=True)
             )
-        ]
         self._client = None
         self._backoff = 5  # seconds; doubles on each failed reconnect
 
@@ -275,6 +370,14 @@ class SSHLogCollector:
 
     # -- reading --------------------------------------------------------------
 
+    def _remote_size(self, remote_path: str) -> int:
+        """Current size in bytes of a remote file (0 if missing)."""
+        assert self._client is not None
+        _, stdout, _ = self._client.exec_command(
+            f"stat -c %s {remote_path} 2>/dev/null || echo 0"
+        )
+        return int(stdout.read().decode().strip() or "0")
+
     def _read_new_bytes(self, remote_path: str, offset: int) -> tuple[str, int]:
         """Return (new_text, new_offset) for one remote file.
 
@@ -284,10 +387,7 @@ class SSHLogCollector:
         """
         assert self._client is not None
         # remote size first, to detect rotation
-        _, stdout, _ = self._client.exec_command(
-            f"stat -c %s {remote_path} 2>/dev/null || echo 0"
-        )
-        size = int(stdout.read().decode().strip() or "0")
+        size = self._remote_size(remote_path)
 
         if size < offset:
             # file shrank: rotated. start over from the beginning.
@@ -325,6 +425,10 @@ class SSHLogCollector:
         records: list[LogRecord] = []
         for f in self.files:
             try:
+                if f.start_at_end and not f.primed:
+                    f.offset = self._remote_size(f.path)
+                    f.primed = True
+                    continue
                 text, new_offset = self._read_new_bytes(f.path, f.offset)
             except Exception as exc:
                 log.warning("read failed on %s: %s", f.path, exc)
@@ -335,11 +439,7 @@ class SSHLogCollector:
                 line = line.strip()
                 if not line:
                     continue
-                rec = (
-                    parse_apache_line(line)
-                    if "apache" in f.path or "access" in f.path
-                    else parse_sshd_line(line)
-                )
+                rec = _parser_for(f.path)(line)
                 if rec is not None:
                     records.append(rec)
         return records

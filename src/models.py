@@ -50,6 +50,7 @@ class EventType(str, Enum):
     DIRECTORY_TRAVERSAL = "directory_traversal"
     AUTH_FAILURE = "auth_failure"
     SERVICE_PROBE = "service_probe"
+    IDS_ALERT = "ids_alert"  # Suricata signature with no closer match
     UNKNOWN = "unknown"
 
 

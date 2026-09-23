@@ -83,6 +83,37 @@ _SENSITIVE_PATHS = [
 ]
 
 
+# Our custom Suricata signature IDs (suricata/rules/custom.rules) mapped
+# onto the pipeline's event types, so a network-side and a log-side hit
+# for the same attack land in the same bucket and share one cooldown.
+# Anything unlisted (Emerging Threats rules, Shellshock, reverse shell)
+# becomes a generic IDS_ALERT.
+_SID_EVENT_TYPES: dict[int, EventType] = {
+    9000001: EventType.SSH_BRUTE_FORCE,
+    9000002: EventType.PORT_SCAN,
+    9000003: EventType.PORT_SCAN,
+    9000004: EventType.PORT_SCAN,
+    9000010: EventType.SQL_INJECTION,
+    9000011: EventType.SQL_INJECTION,
+    9000012: EventType.DIRECTORY_TRAVERSAL,
+    9000013: EventType.DIRECTORY_TRAVERSAL,
+    9000014: EventType.DIRECTORY_TRAVERSAL,
+    9000020: EventType.SUSPICIOUS_USER_AGENT,
+    9000021: EventType.SUSPICIOUS_USER_AGENT,
+    9000022: EventType.SUSPICIOUS_USER_AGENT,
+    9000023: EventType.SUSPICIOUS_USER_AGENT,
+    9000030: EventType.WEB_ENUMERATION,
+    9000031: EventType.WEB_ENUMERATION,
+    9000032: EventType.WEB_ENUMERATION,
+}
+
+# Signatures that mean "already compromised", not "being attacked".
+_CRITICAL_SIDS = {9000050}  # reverse shell leaving a protected host
+
+# Suricata severity comes from the rule's classtype priority.
+_IDS_SEVERITY = {1: Severity.HIGH, 2: Severity.MEDIUM, 3: Severity.LOW}
+
+
 @dataclass
 class _IpState:
     """Per-IP sliding-window state."""
@@ -111,6 +142,7 @@ class Detector:
         web_enum_threshold: int | None = None,
         window: int | None = None,
         alert_cooldown: int | None = None,
+        protected_ips: set[str] | None = None,
     ) -> None:
         self.brute_force_threshold = (
             settings.brute_force_threshold
@@ -129,6 +161,11 @@ class Detector:
         self.alert_cooldown = (
             settings.alert_cooldown if alert_cooldown is None else alert_cooldown
         )
+        # Hosts we defend. Their own outbound connections are not a port
+        # scan, and alerts they originate point at the remote end.
+        self.protected_ips = (
+            {settings.target_ip} if protected_ips is None else set(protected_ips)
+        )
         self._state: dict[str, _IpState] = defaultdict(_IpState)
 
     # -- public API -----------------------------------------------------------
@@ -144,6 +181,8 @@ class Detector:
             events.extend(self._process_sshd(record, st, now, window_start))
         elif record.kind == "apache":
             events.extend(self._process_apache(record, st, now, window_start))
+        elif record.kind == "suricata":
+            events.extend(self._process_suricata(record, now))
         return events
 
     def process_many(self, records: list[LogRecord]) -> list[Event]:
@@ -268,6 +307,58 @@ class Detector:
 
         return events
 
+    # -- suricata (eve.json alert / flow records) ------------------------------
+
+    def _process_suricata(self, record: LogRecord, now: float) -> list[Event]:
+        events: list[Event] = []
+        outbound = record.source_ip in self.protected_ips
+
+        # Every inbound connection counts toward port-scan detection. The
+        # protected host's own outbound traffic (updates, DNS) does not.
+        if record.dest_port and not outbound:
+            scan = self.record_port_probe(record.source_ip, record.dest_port, when=now)
+            if scan is not None:
+                events.append(scan)
+
+        if record.action != "alert":
+            return events
+
+        # Traffic leaving a protected host (e.g. a reverse shell): the host
+        # to act against is the remote end, never our own server.
+        offender = record.dest_ip if outbound and record.dest_ip else record.source_ip
+        event_type = _SID_EVENT_TYPES.get(record.signature_id, EventType.IDS_ALERT)
+        if record.signature_id in _CRITICAL_SIDS:
+            severity = Severity.CRITICAL
+        else:
+            severity = _IDS_SEVERITY.get(record.ids_severity, Severity.MEDIUM)
+
+        # Generic hits are rate-limited per signature, so one noisy rule
+        # cannot mute a different rule for the same host.
+        key = (
+            f"{event_type.value}:{record.signature_id}"
+            if event_type is EventType.IDS_ALERT
+            else None
+        )
+        if not self._can_alert(self._state[offender], event_type, now, key=key):
+            return events
+
+        events.append(Event(
+            source_ip=offender,
+            event_type=event_type,
+            severity=severity,
+            raw_log=record.raw,
+            mitre_technique=record.mitre_technique,
+            details={
+                "source": "suricata",
+                "signature": record.signature,
+                "signature_id": record.signature_id,
+                "category": record.category,
+                "dest_port": record.dest_port,
+                "direction": "outbound" if outbound else "inbound",
+            },
+        ))
+        return events
+
     # -- port scan (fed by Suricata or netstat-style sources) -------------------
 
     def record_port_probe(self, ip: str, port: int, when: float | None = None) -> Event | None:
@@ -309,10 +400,20 @@ class Detector:
     def _matches_any(patterns: list[re.Pattern], text: str) -> bool:
         return any(p.search(text) for p in patterns)
 
-    def _can_alert(self, st: _IpState, event_type: EventType, now: float) -> bool:
-        """Rate-limit alerts per (IP, type). Returns True if we should fire."""
-        last = st.last_alert.get(event_type.value, 0.0)
+    def _can_alert(
+        self,
+        st: _IpState,
+        event_type: EventType,
+        now: float,
+        key: str | None = None,
+    ) -> bool:
+        """Rate-limit alerts per (IP, type). Returns True if we should fire.
+
+        *key* overrides the bucket (default: the event type's value).
+        """
+        bucket = key or event_type.value
+        last = st.last_alert.get(bucket, 0.0)
         if now - last < self.alert_cooldown:
             return False
-        st.last_alert[event_type.value] = now
+        st.last_alert[bucket] = now
         return True

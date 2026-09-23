@@ -1,0 +1,176 @@
+# =============================================================================
+# SecureNet Lab - custom Suricata rules
+#
+# Drop this file into /var/lib/suricata/rules/ and reference it from
+# suricata.yaml via rule-files. These rules are the network-side
+# counterpart to the log-side detector in src/detector/detector.py.
+#
+# Signature IDs are in the 9000000+ range to stay clear of Emerging
+# Threats and other rule sets.
+# =============================================================================
+
+# --- SSH brute force ---------------------------------------------------------
+# The log detector counts failed auth messages; this rule catches the
+# traffic pattern when logs from the target are delayed or unavailable.
+alert tcp any any -> $HOME_NET 22 ( \
+    msg:"SECURENET possible SSH brute force (many SYNs to port 22)"; \
+    flow:to_server; \
+    flags:S; \
+    threshold: type both, track by_src, count 10, seconds 60; \
+    classtype:attempted-admin; \
+    sid:9000001; rev:2; \
+    metadata: mitre_technique T1110; )
+
+# --- Port scanning -----------------------------------------------------------
+# A single source hitting many distinct ports quickly is the classic
+# SYN scan signature.
+alert tcp any any -> $HOME_NET any ( \
+    msg:"SECURENET possible port scan (many SYN packets)"; \
+    flags:S; \
+    threshold: type both, track by_src, count 30, seconds 10; \
+    classtype:attempted-recon; \
+    sid:9000002; rev:1; \
+    metadata: mitre_technique T1046; )
+
+# NULL scan (no TCP flags set) - evasion attempt
+alert tcp any any -> $HOME_NET any ( \
+    msg:"SECURENET TCP NULL scan detected"; \
+    flags:0; \
+    classtype:attempted-recon; \
+    sid:9000003; rev:1; \
+    metadata: mitre_technique T1046; )
+
+# XMAS scan (FIN+PSH+URG)
+alert tcp any any -> $HOME_NET any ( \
+    msg:"SECURENET TCP XMAS scan detected"; \
+    flags:FPU; \
+    classtype:attempted-recon; \
+    sid:9000004; rev:1; \
+    metadata: mitre_technique T1046; )
+
+# --- Web attack signatures ---------------------------------------------------
+
+# SQL injection in the request URI
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET SQL injection attempt in URI"; \
+    flow:established,to_server; \
+    http.uri; \
+    content:"union"; nocase; content:"select"; nocase; distance:0; \
+    classtype:web-application-attack; \
+    sid:9000010; rev:1; \
+    metadata: mitre_technique T1190; )
+
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET SQL injection boolean-based probe"; \
+    flow:established,to_server; \
+    http.uri; \
+    content:"or"; nocase; content:"1=1"; nocase; distance:0; \
+    classtype:web-application-attack; \
+    sid:9000011; rev:1; \
+    metadata: mitre_technique T1190; )
+
+# Directory traversal
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET directory traversal attempt"; \
+    flow:established,to_server; \
+    http.uri.raw; \
+    content:"../"; \
+    classtype:web-application-attack; \
+    sid:9000012; rev:2; \
+    metadata: mitre_technique T1083; )
+
+# Same attack, URL-encoded to slip past naive filters.
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET encoded directory traversal attempt"; \
+    flow:established,to_server; \
+    http.uri.raw; \
+    content:"%2e%2e"; nocase; \
+    classtype:web-application-attack; \
+    sid:9000014; rev:1; \
+    metadata: mitre_technique T1083; )
+
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET attempt to read /etc/passwd"; \
+    flow:established,to_server; \
+    http.uri; \
+    content:"/etc/passwd"; \
+    classtype:web-application-attack; \
+    sid:9000013; rev:1; \
+    metadata: mitre_technique T1083; )
+
+# Scanner user agents
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET known attack tool user-agent (sqlmap)"; \
+    flow:established,to_server; \
+    http.user_agent; content:"sqlmap"; nocase; \
+    classtype:web-application-attack; \
+    sid:9000020; rev:1; \
+    metadata: mitre_technique T1595.002; )
+
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET known attack tool user-agent (nikto)"; \
+    flow:established,to_server; \
+    http.user_agent; content:"nikto"; nocase; \
+    classtype:web-application-attack; \
+    sid:9000021; rev:1; \
+    metadata: mitre_technique T1595.002; )
+
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET known attack tool user-agent (gobuster/dirbuster)"; \
+    flow:established,to_server; \
+    http.user_agent; content:"gobuster"; nocase; \
+    classtype:web-application-attack; \
+    sid:9000022; rev:1; \
+    metadata: mitre_technique T1595.003; )
+
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET known attack tool user-agent (nuclei)"; \
+    flow:established,to_server; \
+    http.user_agent; content:"nuclei"; nocase; \
+    classtype:web-application-attack; \
+    sid:9000023; rev:1; \
+    metadata: mitre_technique T1595.002; )
+
+# --- Sensitive file probes ---------------------------------------------------
+
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET probe for exposed .env file"; \
+    flow:established,to_server; \
+    http.uri; content:"/.env"; \
+    classtype:attempted-recon; \
+    sid:9000030; rev:1; \
+    metadata: mitre_technique T1595.003; )
+
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET probe for exposed .git directory"; \
+    flow:established,to_server; \
+    http.uri; content:"/.git/"; \
+    classtype:attempted-recon; \
+    sid:9000031; rev:1; \
+    metadata: mitre_technique T1595.003; )
+
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET WordPress admin probe"; \
+    flow:established,to_server; \
+    http.uri; content:"/wp-login.php"; \
+    classtype:attempted-recon; \
+    sid:9000032; rev:1; \
+    metadata: mitre_technique T1595.003; )
+
+# --- Shellshock / CVE-2014-6271 ---------------------------------------------
+alert http any any -> $HOME_NET any ( \
+    msg:"SECURENET Shellshock exploitation attempt"; \
+    flow:established,to_server; \
+    http.header; content:"() {"; \
+    classtype:web-application-attack; \
+    sid:9000040; rev:2; \
+    metadata: mitre_technique T1190; )
+
+# --- Reverse shell indicators ------------------------------------------------
+alert tcp $HOME_NET any -> any any ( \
+    msg:"SECURENET possible reverse shell (bash tcp to external host)"; \
+    flow:established,to_server; \
+    content:"bash -i"; \
+    classtype:trojan-activity; \
+    sid:9000050; rev:1; \
+    metadata: mitre_technique T1059.004; )
