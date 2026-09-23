@@ -19,7 +19,9 @@ rotation), we assume it was replaced and read the new file from the top.
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -104,6 +106,8 @@ def parse_apache_line(line: str) -> LogRecord | None:
     """
     try:
         ip, rest = line.split(" ", 1)
+        if not _is_ip(ip):
+            return None
         # skip ident/authuser fields: "- - ["
         ts_start = rest.index("[") + 1
         ts_end = rest.index("]")
@@ -156,6 +160,34 @@ def _parse_syslog_timestamp(raw: str) -> datetime | None:
         return None
 
 
+def _is_ip(value: str) -> bool:
+    """True if *value* is a literal IPv4/IPv6 address."""
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+# sshd always ends these lines with " from <ip> port <n>" (plus " ssh2" on
+# auth results), after the username. Anchoring on that fixed tail is what
+# stops a username like "x from $(cmd)" from being read as the address.
+_SSHD_TAIL = re.compile(r" from (\S+) port \d+(?: ssh2)?$")
+
+
+def _split_user_ip(rest: str) -> tuple[str, str]:
+    """Split '<user> from <ip> port <n> [ssh2]' into (user, ip)."""
+    m = _SSHD_TAIL.search(rest)
+    if m:
+        return rest[:m.start()], m.group(1)
+    if " from " in rest:
+        # e.g. "Accepted publickey ... port 22 ssh2: RSA SHA256:..." or an
+        # older sshd without the port: still take the LAST " from ".
+        user, _, tail = rest.rpartition(" from ")
+        return user, tail.split(" ")[0]
+    return rest, ""
+
+
 def parse_sshd_line(line: str) -> LogRecord | None:
     """Parse one sshd log line.
 
@@ -171,37 +203,31 @@ def parse_sshd_line(line: str) -> LogRecord | None:
 
     timestamp = _parse_syslog_timestamp(raw[:15])
 
-    action = ""
-    user = ""
-    ip = ""
-
-    if "Failed password for" in raw:
-        action = "failed"
-        after = raw.split("Failed password for", 1)[1]
-        if after.startswith(" invalid user "):
-            user = after.split(" invalid user ", 1)[1].split(" from ")[0]
-        else:
-            user = after.strip().split(" from ")[0]
-        if " from " in after:
-            ip = after.split(" from ", 1)[1].split(" ")[0]
-    elif "Accepted password for" in raw or "Accepted publickey for" in raw:
-        action = "accepted"
-        after = raw.split(" for ", 1)[1]
-        user = after.split(" from ")[0]
-        if " from " in after:
-            ip = after.split(" from ", 1)[1].split(" ")[0]
-    elif "Invalid user" in raw:
-        action = "invalid_user"
-        after = raw.split("Invalid user", 1)[1]
-        user = after.strip().split(" from ")[0]
-        if " from " in after:
-            ip = after.split(" from ", 1)[1].split(" ")[0]
-    elif "Connection closed by" in raw or "Disconnected from" in raw:
-        return None  # noise for our purposes
-    else:
+    # Match on the fixed start of the message ("sshd[pid]: <msg>"), never
+    # on a substring anywhere in the line: the username is attacker text
+    # and may contain "Accepted password for" or " from <ip>".
+    _, sep, msg = raw.partition("]: ")
+    if not sep:
         return None
 
-    if not ip:
+    if msg.startswith("Failed password for invalid user "):
+        action = "failed"
+        user, ip = _split_user_ip(msg[len("Failed password for invalid user "):])
+    elif msg.startswith("Failed password for "):
+        action = "failed"
+        user, ip = _split_user_ip(msg[len("Failed password for "):])
+    elif msg.startswith(("Accepted password for ", "Accepted publickey for ")):
+        action = "accepted"
+        user, ip = _split_user_ip(msg.split(" for ", 1)[1])
+    elif msg.startswith("Invalid user "):
+        action = "invalid_user"
+        user, ip = _split_user_ip(msg[len("Invalid user "):])
+    else:
+        return None  # disconnects, session open/close: noise for us
+
+    # The IP later reaches a root firewall command on the target. Anything
+    # that is not a real address is dropped here, at the front door.
+    if not _is_ip(ip):
         return None
 
     return LogRecord(

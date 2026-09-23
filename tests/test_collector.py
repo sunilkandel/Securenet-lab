@@ -218,3 +218,50 @@ class TestParserRouting:
         assert _parser_for("/var/log/httpd/access_log") is parse_apache_line
         assert _parser_for("/var/log/apache2/other.log") is parse_apache_line
         assert _parser_for("/var/log/secure") is parse_sshd_line
+
+
+class TestHostileInput:
+    """The username in an sshd line is attacker-chosen. It must never be
+    able to decide the source IP: that IP ends up in a root firewall
+    command on the target."""
+
+    def test_username_cannot_inject_source_ip(self):
+        line = ("Oct 11 22:14:15 srv sshd[1]: Failed password for invalid user "
+                "x from $(id>/tmp/pwned) from 1.2.3.4 port 22 ssh2")
+        rec = parse_sshd_line(line)
+        assert rec is not None
+        assert rec.source_ip == "1.2.3.4"
+        assert "$(id" in rec.user
+
+    def test_username_cannot_fake_the_tail(self):
+        line = ("Oct 11 22:14:15 srv sshd[1]: Invalid user "
+                "a from 6.6.6.6 port 1 from 1.2.3.4 port 5555")
+        rec = parse_sshd_line(line)
+        assert rec is not None and rec.source_ip == "1.2.3.4"
+
+    def test_username_cannot_change_classification(self):
+        line = ("Oct 11 22:14:15 srv sshd[1]: Invalid user "
+                "Accepted password for x from 1.2.3.4 port 5")
+        rec = parse_sshd_line(line)
+        assert rec is not None and rec.action == "invalid_user"
+
+    def test_non_ip_address_is_dropped(self):
+        for bad in ("evil.example.com", "$(reboot)", "1.2.3.4;id", "'", "999.1.1.1"):
+            line = f"Oct 11 22:14:15 srv sshd[1]: Failed password for root from {bad} port 22 ssh2"
+            assert parse_sshd_line(line) is None, bad
+
+    def test_publickey_line_with_key_suffix(self):
+        line = ("Oct 11 22:15:00 srv sshd[1]: Accepted publickey for sunil from "
+                "10.0.0.1 port 51236 ssh2: RSA SHA256:abcdef")
+        rec = parse_sshd_line(line)
+        assert rec is not None and rec.source_ip == "10.0.0.1"
+
+    def test_ipv6_source(self):
+        line = "Oct 11 22:14:15 srv sshd[1]: Failed password for root from 2001:db8::1 port 22 ssh2"
+        rec = parse_sshd_line(line)
+        assert rec is not None and rec.source_ip == "2001:db8::1"
+
+    def test_apache_non_ip_client_is_dropped(self):
+        line = ('$(id) - - [11/Oct/2026:02:14:15 +0000] '
+                '"GET / HTTP/1.1" 200 5 "-" "curl"')
+        assert parse_apache_line(line) is None
