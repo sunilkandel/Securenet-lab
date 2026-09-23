@@ -149,3 +149,14 @@ class TestSummary:
         assert summary["active_bans"] == 1
         assert summary["unique_attackers"] == 1
         assert "events_by_severity" in summary
+
+
+
+def test_top_attackers_worst_severity_is_ranked(db):
+    # text MAX() would say "medium" here: "medium" > "critical" alphabetically
+    db.insert_event(make_event("6.6.6.6", severity=Severity.CRITICAL))
+    db.insert_event(make_event("6.6.6.6", severity=Severity.MEDIUM))
+    db.insert_event(make_event("7.7.7.7", severity=Severity.LOW))
+    db.insert_event(make_event("7.7.7.7", severity=Severity.HIGH))
+    worst = {t["ip"]: t["worst_severity"] for t in db.top_attackers(5)}
+    assert worst == {"6.6.6.6": "critical", "7.7.7.7": "high"}
