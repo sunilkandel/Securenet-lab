@@ -94,7 +94,7 @@ logs pulled<br>
 - [x] Phase 4 — Threat Intelligence + Auto-Ban
 - [x] Phase 5 — Alert System
 - [x] Phase 6 — Java Dashboard
-- [ ] Phase 7 — R Analysis
+- [x] Phase 7 — R Analysis
 - [ ] Phase 8 — Integration
 
 
