@@ -89,7 +89,7 @@ logs pulled<br>
 
 - [x] Phase 0 — Lab Setup
 - [x] Phase 1 — Log Collection
-- [ ] Phase 2 — Attack Detection
+- [x] Phase 2 — Attack Detection
 - [ ] Phase 3 — Suricata IDS
 - [ ] Phase 4 — Threat Intelligence + Auto-Ban
 - [ ] Phase 5 — Alert System
