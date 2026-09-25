@@ -187,6 +187,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         # -- Alerts — Telegram
         telegram_bot_token=_env("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_env("TELEGRAM_CHAT_ID", ""),
+        alert_cooldown=_env_int("ALERT_COOLDOWN", 300),
 
         # -- Alerts — Email
         smtp_host=_env("SMTP_HOST", ""),
