@@ -133,8 +133,12 @@ class Settings:
 def load_settings(env_file: str | Path | None = None) -> Settings:
     """Load environment variables from *env_file* and return a Settings instance.
 
-    If *env_file* is None, python-dotenv searches upward for config.env / .env.
+    If *env_file* is None, SECURENET_CONFIG (a path) is used when set;
+    otherwise config.env in the project root, then python-dotenv's usual
+    upward search for a .env file.
     """
+    if env_file is None and os.environ.get("SECURENET_CONFIG"):
+        env_file = os.environ["SECURENET_CONFIG"]
     if env_file is None:
         env_path = _PROJECT_ROOT / "config.env"
         if env_path.exists():
