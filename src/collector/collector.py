@@ -22,6 +22,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+import shlex
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -327,6 +328,16 @@ def _parser_for(path: str) -> Callable[[str], LogRecord | None]:
 # SSH transport
 # ---------------------------------------------------------------------------
 
+# Upper bound on one read, so a large backlog (first start, an eve.json
+# burst) is consumed over several cycles rather than all in memory.
+_MAX_READ = 5 * 1024 * 1024
+
+_PERMISSION_HINT = (
+    " - the SSH user cannot read this log. Run scripts/setup/setup_target.sh"
+    " on the target and set LOG_READ_HELPER in config.env (see docs/architecture.md)."
+)
+
+
 @dataclass
 class _RemoteFile:
     """Tracks read progress through one remote log file."""
@@ -352,6 +363,7 @@ class SSHLogCollector:
         key_path: str | None = None,
         port: int | None = None,
         log_paths: list[str] | None = None,
+        read_helper: str | None = None,
     ) -> None:
         self.host = host or settings.target_ip
         self.user = user or settings.ssh_user
@@ -365,6 +377,9 @@ class SSHLogCollector:
             )
         self._client = None
         self._backoff = 5  # seconds; doubles on each failed reconnect
+        self.read_helper = (
+            settings.log_read_helper if read_helper is None else read_helper
+        )
 
     # -- connection -----------------------------------------------------------
 
@@ -396,20 +411,48 @@ class SSHLogCollector:
 
     # -- reading --------------------------------------------------------------
 
+    def _command(self, action: str, remote_path: str, offset: int = 0) -> str:
+        """Shell command for "size" or "read" on the target.
+
+        With LOG_READ_HELPER set, reads go through that root-owned helper via
+        `sudo -n` (it only allows the configured log files). Reads are capped
+        per cycle so a big backlog is consumed over several polls.
+        """
+        path = shlex.quote(remote_path)
+        if self.read_helper:
+            helper = f"sudo -n {shlex.quote(self.read_helper)}"
+            if action == "size":
+                return f"{helper} size {path}"
+            return f"{helper} read {path} {int(offset)} | head -c {_MAX_READ}"
+        if action == "size":
+            return f"stat -c %s {path} 2>/dev/null || echo 0"
+        # tail -c +N is 1-indexed, hence the +1
+        return f"tail -c +{int(offset) + 1} {path} | head -c {_MAX_READ}"
+
     def _remote_size(self, remote_path: str) -> int:
         """Current size in bytes of a remote file (0 if missing)."""
         assert self._client is not None
-        _, stdout, _ = self._client.exec_command(
-            f"stat -c %s {remote_path} 2>/dev/null || echo 0"
+        _, stdout, stderr = self._client.exec_command(
+            self._command("size", remote_path), timeout=30
         )
-        return int(stdout.read().decode().strip() or "0")
+        out = stdout.read().decode(errors="replace").strip()
+        err = stderr.read().decode(errors="replace").strip()
+        if err:
+            log.warning("size check failed for %s: %s", remote_path, err)
+        try:
+            return int(out or "0")
+        except ValueError:
+            return 0
 
     def _read_new_bytes(self, remote_path: str, offset: int) -> tuple[str, int]:
-        """Return (new_text, new_offset) for one remote file.
+        """Return (complete new lines, new_offset) for one remote file.
 
-        Uses tail with a byte offset so we never re-read or re-parse old
-        lines, even across reconnects. `tail -c +N` is 1-indexed, hence
-        the +1.
+        The offset only ever advances by bytes actually consumed, and only
+        up to the last newline. So a file that grows between the size check
+        and the read is not re-read next time (no duplicate events), a line
+        still being written is left for the next poll instead of being
+        parsed in two broken halves, and a read that fails (e.g. permission
+        denied) is retried rather than silently skipped.
         """
         assert self._client is not None
         # remote size first, to detect rotation
@@ -424,13 +467,21 @@ class SSHLogCollector:
             return "", offset
 
         _, stdout, stderr = self._client.exec_command(
-            f"tail -c +{offset + 1} {remote_path}"
+            self._command("read", remote_path, offset), timeout=30
         )
-        data = stdout.read().decode("utf-8", errors="replace")
-        err = stderr.read().decode().strip()
+        raw = stdout.read()
+        err = stderr.read().decode(errors="replace").strip()
+
+        end = raw.rfind(b"\n")
+        if end < 0:
+            if err:
+                hint = _PERMISSION_HINT if "denied" in err.lower() else ""
+                log.error("cannot read %s: %s%s", remote_path, err, hint)
+            return "", offset
         if err:
-            log.warning("tail error on %s: %s", remote_path, err)
-        return data, size
+            log.warning("read warning on %s: %s", remote_path, err)
+        consumed = raw[: end + 1]
+        return consumed.decode("utf-8", errors="replace"), offset + len(consumed)
 
     def poll(self) -> list[LogRecord]:
         """Read new lines from every tracked file and parse them.

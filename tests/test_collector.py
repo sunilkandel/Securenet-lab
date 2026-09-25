@@ -265,3 +265,128 @@ class TestHostileInput:
         line = ('$(id) - - [11/Oct/2026:02:14:15 +0000] '
                 '"GET / HTTP/1.1" 200 5 "-" "curl"')
         assert parse_apache_line(line) is None
+
+
+
+# -- transport: a fake SSH target that runs the collector's shell commands ----
+
+import shlex as _shlex  # noqa: E402
+
+from src.collector.collector import SSHLogCollector  # noqa: E402
+
+
+class _Stream:
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+
+class FakeTarget:
+    """Understands exactly the size/read commands the collector sends,
+    with or without the sudo helper, and serves in-memory files."""
+
+    def __init__(self):
+        self.files: dict[str, bytes] = {}
+        self.denied: set[str] = set()
+        self.commands: list[str] = []
+        self.grow_during_read: bytes = b""
+
+    # paramiko surface used by the collector
+    def get_transport(self):
+        return self
+
+    def is_active(self):
+        return True
+
+    def exec_command(self, cmd, timeout=None):
+        self.commands.append(cmd)
+        out, err = self._run(cmd)
+        return None, _Stream(out), _Stream(err)
+
+    def close(self):
+        pass
+
+    def _run(self, cmd):
+        first = cmd.split("|")[0]
+        words = _shlex.split(first)
+        if words[:2] == ["sudo", "-n"]:
+            words = words[3:]                   # drop "sudo -n <helper>"
+            action, path = words[0], words[1]
+            offset = int(words[2]) if action == "read" else 0
+        elif words[0] == "stat":
+            action, path, offset = "size", words[3], 0
+        else:                                   # tail -c +N path
+            action, path, offset = "read", words[3], int(words[2][1:]) - 1
+        if action == "size":
+            return str(len(self.files.get(path, b""))).encode(), b""
+        if path in self.denied:
+            return b"", f"tail: cannot open '{path}' for reading: Permission denied".encode()
+        data = self.files.get(path, b"")
+        if self.grow_during_read:               # writer appended after stat
+            data += self.grow_during_read
+            self.files[path] = data
+            self.grow_during_read = b""
+        return data[offset:], b""
+
+
+SSH1 = b"Oct 11 22:14:15 srv sshd[1]: Failed password for root from 1.2.3.4 port 22 ssh2\n"
+SSH2 = b"Oct 11 22:14:16 srv sshd[1]: Failed password for root from 5.6.7.8 port 22 ssh2\n"
+
+
+def make_collector(target, helper=""):
+    col = SSHLogCollector(host="t", user="u", log_paths=["/var/log/secure"],
+                          read_helper=helper)
+    col._client = target
+    return col
+
+
+class TestTransport:
+    def test_reads_new_lines_once(self):
+        t = FakeTarget(); t.files["/var/log/secure"] = SSH1
+        col = make_collector(t)
+        assert [r.source_ip for r in col.poll()] == ["1.2.3.4"]
+        assert col.poll() == []                          # nothing new
+        t.files["/var/log/secure"] += SSH2
+        assert [r.source_ip for r in col.poll()] == ["5.6.7.8"]
+
+    def test_partial_line_waits_for_the_rest(self):
+        t = FakeTarget(); t.files["/var/log/secure"] = SSH1 + SSH2[:30]
+        col = make_collector(t)
+        assert [r.source_ip for r in col.poll()] == ["1.2.3.4"]
+        t.files["/var/log/secure"] = SSH1 + SSH2        # writer finished the line
+        assert [r.source_ip for r in col.poll()] == ["5.6.7.8"]
+
+    def test_growth_between_size_and_read_is_not_read_twice(self):
+        t = FakeTarget(); t.files["/var/log/secure"] = SSH1
+        t.grow_during_read = SSH2
+        col = make_collector(t)
+        assert [r.source_ip for r in col.poll()] == ["1.2.3.4", "5.6.7.8"]
+        assert col.poll() == []                          # no duplicate of SSH2
+
+    def test_permission_denied_is_reported_and_retried(self, caplog):
+        t = FakeTarget(); t.files["/var/log/secure"] = SSH1
+        t.denied.add("/var/log/secure")
+        col = make_collector(t)
+        with caplog.at_level("ERROR"):
+            assert col.poll() == []
+        assert "Permission denied" in caplog.text and "LOG_READ_HELPER" in caplog.text
+        assert col.files[0].offset == 0                  # not skipped past
+        t.denied.clear()                                 # access fixed
+        assert [r.source_ip for r in col.poll()] == ["1.2.3.4"]
+
+    def test_rotation_restarts_from_the_top(self):
+        t = FakeTarget(); t.files["/var/log/secure"] = SSH1 + SSH2
+        col = make_collector(t)
+        assert len(col.poll()) == 2
+        t.files["/var/log/secure"] = SSH1                # rotated: smaller file
+        assert [r.source_ip for r in col.poll()] == ["1.2.3.4"]
+
+    def test_helper_mode_uses_sudo_n_and_quotes(self):
+        t = FakeTarget(); t.files["/var/log/secure"] = SSH1
+        col = make_collector(t, helper="/usr/local/sbin/securenet-logread")
+        assert [r.source_ip for r in col.poll()] == ["1.2.3.4"]
+        assert t.commands[0] == "sudo -n /usr/local/sbin/securenet-logread size /var/log/secure"
+        assert t.commands[1].startswith(
+            "sudo -n /usr/local/sbin/securenet-logread read /var/log/secure 0 | head -c ")

@@ -80,6 +80,7 @@ class Settings:
     sshd_log_path: str = "/var/log/secure"
     mail_log_path: str = "/var/log/maillog"
     collect_interval: int = 10          # seconds between collection cycles
+    log_read_helper: str = ""           # root-owned reader run via sudo -n (see setup_target.sh)
 
     # -- Detection thresholds -------------------------------------------------
     brute_force_threshold: int = 5      # failed SSH attempts before alert
@@ -156,6 +157,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         sshd_log_path=_env("SSHD_LOG_PATH", "/var/log/secure"),
         mail_log_path=_env("MAIL_LOG_PATH", "/var/log/maillog"),
         collect_interval=_env_int("COLLECT_INTERVAL", 10),
+        log_read_helper=_env("LOG_READ_HELPER", ""),
 
         # -- Detection thresholds
         brute_force_threshold=_env_int("BRUTE_FORCE_THRESHOLD", 5),
