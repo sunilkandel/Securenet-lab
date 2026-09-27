@@ -53,8 +53,8 @@ except ImportError:  # paramiko is optional for offline tests
 class LogRecord:
     """One parsed log line, normalized enough for detection.
 
-    `kind` is "apache", "sshd" or "suricata". Fields not relevant to the
-    source are left at their defaults.
+    `kind` is "apache", "sshd", "mail" or "suricata". Fields not relevant
+    to the source are left at their defaults.
     """
     kind: str
     source_ip: str
@@ -68,6 +68,8 @@ class LogRecord:
     user: str = ""
     action: str = ""          # "failed", "accepted", "invalid_user", ...
     port: int = 0             # client source port: identifies one connection
+    attempts: int = 1         # mail: failed logins this line reports
+    service: str = ""         # mail: "smtp", "imap", "pop3", ...
     raw: str = ""
     # suricata (eve.json); action holds the EVE type: "alert" or "flow"
     dest_ip: str = ""
@@ -261,6 +263,82 @@ def parse_sshd_line(line: str) -> LogRecord | None:
 
 
 # ---------------------------------------------------------------------------
+# Mail (/var/log/maillog) parsing: Postfix SMTP AUTH and Dovecot IMAP/POP3
+# ---------------------------------------------------------------------------
+
+# "Oct 11 22:14:15 host tag[pid]: message" (the [pid] is optional)
+_SYSLOG_TAG = re.compile(r"^\w{3} +\d{1,2} [\d:]{8} \S+ ([^\s:\[]+)(?:\[\d+\])?: (.*)$")
+
+# Postfix: "warning: <rdns-name>[<ip>]: SASL LOGIN authentication failed: ..."
+# The IP is taken from the brackets right before ": SASL", never from the
+# reverse-DNS name (which the attacker's DNS controls).
+_POSTFIX_SASL = re.compile(
+    r"^warning: \S*\[([0-9A-Fa-f:.]+)\]: SASL \S+ authentication failed"
+)
+# Dovecot: "imap-login: Disconnected (auth failed, 3 attempts in 12 secs):
+#   user=<bob>, method=PLAIN, rip=1.2.3.4, lip=..., session=<...>"
+_DOVECOT_SERVICE = re.compile(r"^(\w+)-login: ")
+_DOVECOT_ATTEMPTS = re.compile(r"\(auth failed, (\d+) attempts?")
+_DOVECOT_RIP = re.compile(r"(?:^|[ ,])rip=([0-9A-Fa-f:.]+)")
+_DOVECOT_USER = re.compile(r"(?:^|[ ,])user=<([^>]*)>")
+
+# One log line can report several attempts; cap what a single line counts.
+_MAX_ATTEMPTS_PER_LINE = 50
+
+
+def parse_mail_line(line: str) -> LogRecord | None:
+    """Parse one maillog line into a failed mail login, or None.
+
+    Handles the shapes that matter for brute-force detection:
+        Oct 11 22:14:15 srv postfix/smtpd[99]: warning: unknown[1.2.3.4]: SASL LOGIN authentication failed: UGFzc3dvcmQ6
+        Oct 11 22:14:15 srv dovecot[88]: imap-login: Disconnected (auth failed, 1 attempts in 2 secs): user=<bob>, method=PLAIN, rip=1.2.3.4, lip=10.0.0.2, session=<abc>
+    """
+    raw = line.strip()
+    m = _SYSLOG_TAG.match(raw)
+    if not m:
+        return None
+    tag, msg = m.group(1), m.group(2)
+
+    if tag.startswith("postfix/"):
+        m = _POSTFIX_SASL.match(msg)
+        if not m:
+            return None
+        ip, user, service, attempts = m.group(1), "", "smtp", 1
+    elif tag.startswith("dovecot"):
+        svc = _DOVECOT_SERVICE.match(msg)
+        count = _DOVECOT_ATTEMPTS.search(msg)
+        if not svc or not count:
+            return None
+        # The username is attacker text and comes before rip=, so it could
+        # carry a fake "rip=". The real one is the last occurrence.
+        rips = _DOVECOT_RIP.findall(msg)
+        if not rips:
+            return None
+        ip = rips[-1]
+        users = _DOVECOT_USER.findall(msg)
+        user = users[0] if users else ""
+        service = svc.group(1)
+        attempts = min(max(int(count.group(1)), 1), _MAX_ATTEMPTS_PER_LINE)
+    else:
+        return None
+
+    # Like sshd: the IP may end up in a root firewall command.
+    if not _is_ip(ip):
+        return None
+
+    return LogRecord(
+        kind="mail",
+        source_ip=ip,
+        timestamp=_parse_syslog_timestamp(raw[:15]),
+        user=user,
+        action="failed",
+        attempts=attempts,
+        service=service,
+        raw=raw,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Suricata EVE JSON parsing
 # ---------------------------------------------------------------------------
 
@@ -340,6 +418,8 @@ def _parser_for(path: str) -> Callable[[str], LogRecord | None]:
         return parse_eve_line
     if "apache" in path or "access" in path:
         return parse_apache_line
+    if "mail" in path:
+        return parse_mail_line
     return parse_sshd_line
 
 
@@ -389,7 +469,12 @@ class SSHLogCollector:
         self.user = user or settings.ssh_user
         self.key_path = key_path or settings.ssh_key_path
         self.port = port or settings.ssh_port
-        paths = log_paths or [settings.apache_log_path, settings.sshd_log_path]
+        # A missing maillog (no mail server on the target) reads as empty.
+        paths = log_paths or [
+            settings.apache_log_path,
+            settings.sshd_log_path,
+            settings.mail_log_path,
+        ]
         self.files = [_RemoteFile(p) for p in paths]
         if log_paths is None and settings.suricata_enabled:
             self.files.append(

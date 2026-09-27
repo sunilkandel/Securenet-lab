@@ -3,8 +3,8 @@ A self-hosted network security monitoring system with IDS, threat intelligence, 
 
 ## What It Does
 
-- Collects logs in real time from a target Linux server (Apache, SSH, Mail)
-- Detects attacks: brute force, port scans, web enumeration
+- Collects logs in real time from a target Linux server (Apache, SSH, Mail: Postfix/Dovecot)
+- Detects attacks: SSH and mail brute force, port scans, web enumeration, SQL injection, directory traversal
 - Checks attacking IPs against AbuseIPDB threat intelligence
 - Automatically bans malicious IPs via firewall rules
 - Sends real-time alerts via Telegram
