@@ -1,0 +1,16 @@
+{
+  "total_events": 3,
+  "active_bans": 1,
+  "unique_attackers": 2,
+  "last_event_at": "2026-09-23T16:09:40.010977+00:00",
+  "events_by_type": {
+    "ids_alert": 1,
+    "port_scan": 1,
+    "ssh_brute_force": 1
+  },
+  "events_by_severity": {
+    "critical": 1,
+    "high": 1,
+    "medium": 1
+  }
+}

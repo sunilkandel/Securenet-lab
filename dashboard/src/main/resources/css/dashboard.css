@@ -1,0 +1,68 @@
+/* Dark theme, same palette as the web dashboard (src/api/static/dashboard.html). */
+.root-pane {
+    -fx-background-color: #0d1117;
+    -fx-font-family: "DejaVu Sans", "Segoe UI", sans-serif;
+    -fx-font-size: 13px;
+}
+.label { -fx-text-fill: #c9d1d9; }
+
+.header { -fx-padding: 18 20 14 20; }
+.title { -fx-font-size: 22px; -fx-font-weight: bold; -fx-text-fill: #f0f6fc; }
+.status { -fx-text-fill: #8b949e; }
+.status.live { -fx-text-fill: #3fb950; }
+.status.down { -fx-text-fill: #f85149; }
+
+.card, .panel {
+    -fx-background-color: #161b22;
+    -fx-border-color: #30363d;
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+    -fx-padding: 14 16 14 16;
+}
+.card-value { -fx-font-size: 26px; -fx-font-weight: bold; -fx-text-fill: #f0f6fc; }
+.card-label { -fx-text-fill: #8b949e; }
+.panel { -fx-spacing: 8; }
+.panel-title { -fx-font-weight: bold; -fx-text-fill: #8b949e; }
+
+/* charts */
+.chart-plot-background { -fx-background-color: transparent; }
+.chart-vertical-grid-lines { -fx-stroke: transparent; }
+.chart-horizontal-grid-lines { -fx-stroke: #21262d; }
+.chart-alternative-row-fill { -fx-fill: transparent; }
+.axis { -fx-tick-label-fill: #8b949e; }
+.axis-tick-mark, .axis-minor-tick-mark { -fx-stroke: #30363d; }
+.default-color0.chart-series-line { -fx-stroke: #58a6ff; -fx-stroke-width: 2px; }
+.default-color0.chart-line-symbol { -fx-background-color: #58a6ff, #161b22; }
+.default-color0.chart-bar { -fx-bar-fill: #f0883e; }
+
+/* tables */
+.table-view {
+    -fx-background-color: transparent;
+    -fx-control-inner-background: #161b22;
+    -fx-control-inner-background-alt: #1b2129;
+    -fx-table-cell-border-color: #21262d;
+    -fx-selection-bar: #1f6feb;
+    -fx-selection-bar-non-focused: #1f3b63;
+    -fx-border-color: transparent;
+}
+.table-view .column-header-background { -fx-background-color: #161b22; }
+.table-view .column-header, .table-view .filler {
+    -fx-background-color: #161b22;
+    -fx-border-color: transparent transparent #30363d transparent;
+}
+.table-view .column-header .label { -fx-text-fill: #8b949e; -fx-font-weight: bold; }
+.table-row-cell { -fx-text-fill: #c9d1d9; }
+.table-view .placeholder .label { -fx-text-fill: #8b949e; }
+
+/* scroll bars, to match the dark tables */
+.scroll-bar { -fx-background-color: #161b22; }
+.scroll-bar .thumb { -fx-background-color: #30363d; -fx-background-radius: 4; }
+.scroll-bar .increment-button, .scroll-bar .decrement-button { -fx-background-color: transparent; -fx-padding: 2; }
+.scroll-bar .increment-arrow, .scroll-bar .decrement-arrow { -fx-background-color: #8b949e; }
+.table-view .corner { -fx-background-color: #161b22; }
+
+.sev-low { -fx-text-fill: #8b949e; }
+.sev-medium { -fx-text-fill: #d29922; }
+.sev-high { -fx-text-fill: #f0883e; -fx-font-weight: bold; }
+.sev-critical { -fx-text-fill: #f85149; -fx-font-weight: bold; }
+.sev-unknown { -fx-text-fill: #c9d1d9; }

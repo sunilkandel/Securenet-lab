@@ -217,16 +217,27 @@ class Database:
         return [{"day": r["day"], "count": r["n"]} for r in rows]
 
     def top_attackers(self, limit: int = 10) -> list[dict[str, Any]]:
+        # Severity is stored as text, and MAX() on text is alphabetical
+        # ("critical" < "high" < "low" < "medium"), which would report a
+        # host with a critical and a medium event as "medium". Rank first.
         rows = self._query(
             """
-            SELECT source_ip, COUNT(*) AS n, MAX(severity) AS worst
+            SELECT source_ip, COUNT(*) AS n,
+                   MAX(CASE severity WHEN 'critical' THEN 4 WHEN 'high' THEN 3
+                                     WHEN 'medium' THEN 2 WHEN 'low' THEN 1
+                                     ELSE 0 END) AS worst
             FROM events
             GROUP BY source_ip ORDER BY n DESC LIMIT ?
             """,
             (limit,),
         )
+        names = {4: "critical", 3: "high", 2: "medium", 1: "low"}
         return [
-            {"ip": r["source_ip"], "count": r["n"], "worst_severity": r["worst"]}
+            {
+                "ip": r["source_ip"],
+                "count": r["n"],
+                "worst_severity": names.get(r["worst"], "unknown"),
+            }
             for r in rows
         ]
 

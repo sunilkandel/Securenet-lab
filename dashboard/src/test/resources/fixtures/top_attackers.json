@@ -1,0 +1,12 @@
+[
+  {
+    "ip": "192.168.56.10",
+    "count": 2,
+    "worst_severity": "critical"
+  },
+  {
+    "ip": "203.0.113.5",
+    "count": 1,
+    "worst_severity": "medium"
+  }
+]
