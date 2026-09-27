@@ -111,11 +111,16 @@ handling is the core of the design.
 | Stored XSS in the web dashboard | Every API value is HTML-escaped before it is inserted; Chart.js is pinned with Subresource Integrity. |
 | Secrets in logs | The Telegram bot token is redacted from error messages (requests puts the API URL, token included, in its exceptions). `config.env` is created `chmod 600`. |
 
+SSH to the target verifies its host key against `known_hosts`
+(`src/ssh_client.py`): an unknown or changed key is refused, so another
+machine on the lab network cannot pose as the target to feed fake logs or
+receive firewall commands. `ssh-copy-id` during setup saves the key after
+you confirm its fingerprint.
+
 Known limits, by design or left for later:
 
 - The REST API is **unauthenticated and read-only**. Expose it only on the
-  lab network.
-- SSH to the target trusts the host key on first use (`AutoAddPolicy`).
+  lab network (`API_HOST`).
 - The monitor's account can change the target's firewall: that is what
   auto-ban needs.
 - Spoofed scans can still get a third party's IP banned; `NEVER_BAN`
@@ -133,6 +138,7 @@ test results.
 |---|---|---|
 | `TARGET_IP` | `192.168.56.20` | Target VM address (never banned) |
 | `SSH_USER`, `SSH_PORT`, `SSH_KEY_PATH` | -, `22`, - | Login to the target |
+| `SSH_KNOWN_HOSTS` | `~/.ssh/known_hosts` | Target host key must be here; unknown or changed keys are refused |
 | `APACHE_LOG_PATH` | `/var/log/httpd/access_log` | |
 | `SSHD_LOG_PATH` | `/var/log/secure` | |
 | `MAIL_LOG_PATH` | `/var/log/maillog` | Read when present; stays empty unless the target runs a mail server |
@@ -152,7 +158,7 @@ test results.
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | empty | |
 | `ALERT_COOLDOWN` | `300` | Seconds between alerts for one IP; `0` = none |
 | `SMTP_HOST`, `SMTP_PORT`, `ALERT_FROM`, `ALERT_TO` | -, `25`, -, - | Email fallback |
-| `API_HOST`, `API_PORT` | `0.0.0.0`, `8000` | |
+| `API_HOST`, `API_PORT`, `API_DEBUG` | `0.0.0.0`, `8000`, `false` | Used by `python -m src.api.server`; set `API_HOST` to the monitor's lab IP to keep the API off other networks |
 | `LOG_LEVEL`, `LOG_FORMAT`, `LOG_FILE_ENABLED` | `INFO`, `json`, `true` | Log file: `logs/securenet.log` |
 
 ## Testing

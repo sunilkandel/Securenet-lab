@@ -74,6 +74,7 @@ class Settings:
     ssh_user: str = ""
     ssh_port: int = 22
     ssh_key_path: str = ""
+    ssh_known_hosts: str = ""           # empty = ~/.ssh/known_hosts
 
     # -- Log collection -------------------------------------------------------
     apache_log_path: str = "/var/log/httpd/access_log"
@@ -155,6 +156,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         ssh_user=_env("SSH_USER", ""),
         ssh_port=_env_int("SSH_PORT", 22),
         ssh_key_path=_env("SSH_KEY_PATH", ""),
+        ssh_known_hosts=_env("SSH_KNOWN_HOSTS", ""),
 
         # -- Log collection
         apache_log_path=_env("APACHE_LOG_PATH", "/var/log/httpd/access_log"),

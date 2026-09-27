@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Callable, Iterator
 
+from src import ssh_client
 from src.config import settings
 from src.logging_setup import get_logger
 
@@ -38,11 +39,6 @@ if TYPE_CHECKING:
     from src.storage import Database
 
 log = get_logger(__name__)
-
-try:
-    import paramiko
-except ImportError:  # paramiko is optional for offline tests
-    paramiko = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -498,21 +494,9 @@ class SSHLogCollector:
     # -- connection -----------------------------------------------------------
 
     def _connect(self) -> None:
-        if paramiko is None:
-            raise RuntimeError(
-                "paramiko is not installed; run: pip install -r requirements.txt"
-            )
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
-            self.host,
-            port=self.port,
-            username=self.user,
-            key_filename=self.key_path or None,
-            timeout=10,
-            banner_timeout=10,
+        self._client = ssh_client.connect(
+            self.host, self.port, self.user, self.key_path
         )
-        self._client = client
         self._backoff = 5
         log.info("connected to %s as %s", self.host, self.user)
 

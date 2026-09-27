@@ -31,17 +31,13 @@ import ipaddress
 import shlex
 from datetime import datetime, timedelta, timezone
 
+from src import ssh_client
 from src.config import settings
 from src.logging_setup import get_logger
 from src.models import Ban, BanStatus
 from src.storage import Database
 
 log = get_logger(__name__)
-
-try:
-    import paramiko
-except ImportError:
-    paramiko = None  # type: ignore[assignment]
 
 
 class AutoBan:
@@ -169,23 +165,16 @@ class AutoBan:
 
         Commands carry their own `sudo -n` (see module docstring).
         """
-        if paramiko is None:
-            log.error("paramiko not installed; cannot manage remote firewall")
-            return False
         try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(
-                self.host,
-                port=self.port,
-                username=self.user,
-                key_filename=self.key_path or None,
-                timeout=10,
+            client = ssh_client.connect(
+                self.host, self.port, self.user, self.key_path
             )
-            _, stdout, stderr = client.exec_command(command, timeout=30)
-            rc = stdout.channel.recv_exit_status()
-            err = stderr.read().decode().strip()
-            client.close()
+            try:
+                _, stdout, stderr = client.exec_command(command, timeout=30)
+                rc = stdout.channel.recv_exit_status()
+                err = stderr.read().decode().strip()
+            finally:
+                client.close()
             if rc != 0:
                 log.error("remote command failed (%d): %s", rc, err)
                 return False
