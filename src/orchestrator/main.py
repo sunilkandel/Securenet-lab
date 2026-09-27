@@ -58,7 +58,7 @@ class Pipeline:
         interval: int | None = None,
     ) -> None:
         self.db = db or Database(settings.db_path)
-        self.collector = collector or SSHLogCollector()
+        self.collector = collector or SSHLogCollector(db=self.db)
         self.detector = detector or Detector()
         self.intel = intel or ThreatIntelClient(self.db)
         self.banner = banner or AutoBan(self.db)
@@ -140,9 +140,15 @@ class Pipeline:
         )
         while not self._stop:
             started = time.time()
-            stats = self.run_once()
-            if stats["collected"] or stats["events"]:
-                log.info("cycle: %s", stats)
+            try:
+                stats = self.run_once()
+            except Exception:
+                # e.g. a locked database: log it and try again next cycle
+                # rather than exit (a restart would lose detector state)
+                log.exception("pipeline cycle failed; retrying next cycle")
+            else:
+                if stats["collected"] or stats["events"]:
+                    log.info("cycle: %s", stats)
             elapsed = time.time() - started
             time.sleep(max(0.0, self.interval - elapsed))
 

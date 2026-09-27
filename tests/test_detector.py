@@ -5,7 +5,7 @@ These use small thresholds and synthetic LogRecords so each rule can be
 exercised in isolation without any network or SSH dependency.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -240,3 +240,64 @@ class TestSuricata:
 
     def test_single_flow_is_quiet(self):
         assert self.make().process(ids("7.7.7.7", action="flow", dest_port=22)) == []
+
+
+def sshd(ip: str, action: str, port: int, offset_s: int = 0,
+         user: str = "admin") -> LogRecord:
+    return LogRecord(
+        kind="sshd", source_ip=ip, user=user, action=action, port=port,
+        timestamp=datetime(2026, 10, 11, 10, 0, 0) + timedelta(seconds=offset_s),
+    )
+
+
+class TestInvalidUserCounting:
+    def detector(self):
+        return Detector(brute_force_threshold=5, window=300, alert_cooldown=0)
+
+    def test_invalid_user_attempt_counts_once(self):
+        d, events = self.detector(), []
+        for i in range(3):   # 3 attempts = 6 log lines, below threshold 5
+            events += d.process(sshd("6.6.6.6", "invalid_user", 50000 + i, i))
+            events += d.process(sshd("6.6.6.6", "failed", 50000 + i, i))
+        assert events == []
+
+    def test_more_guesses_on_one_connection_all_count(self):
+        d, events = self.detector(), []
+        events += d.process(sshd("6.6.6.6", "invalid_user", 50000))
+        for i in range(4):   # 1 + 3 further guesses = 4 attempts
+            events += d.process(sshd("6.6.6.6", "failed", 50000, i))
+        assert events == []
+        events += d.process(sshd("6.6.6.6", "failed", 50000, 5))
+        assert [e.details["attempts"] for e in events] == [5]
+
+    def test_invalid_user_alone_counts(self):
+        # passwords disabled: sshd only logs "Invalid user"
+        d, events = self.detector(), []
+        for i in range(5):
+            events += d.process(sshd("6.6.6.6", "invalid_user", 50000 + i, i))
+        assert [e.event_type for e in events] == [EventType.SSH_BRUTE_FORCE]
+
+
+class TestEncodedPayloads:
+    @pytest.mark.parametrize("path", [
+        "/p?id=1%20UNION%20SELECT%20password",
+        "/p?id=1+union+select+password",
+        "/p?id=1%2520union%2520select",   # double-encoded
+    ])
+    def test_encoded_sql_injection_detected(self, detector, path):
+        types = {e.event_type for e in detector.process(web("5.5.5.5", path))}
+        assert EventType.SQL_INJECTION in types
+
+    def test_double_encoded_traversal_detected(self, detector):
+        events = detector.process(web("5.5.5.5", "/%252e%252e%252fetc%252fshadow"))
+        assert EventType.DIRECTORY_TRAVERSAL in {e.event_type for e in events}
+
+
+class TestEventTime:
+    def test_event_carries_log_time_in_utc(self, detector):
+        rec = web("5.5.5.5", "/../../etc/passwd")
+        rec.timestamp = datetime(2020, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        events = detector.process(rec)
+        assert events and all(
+            e.timestamp == "2020-01-02T03:04:05+00:00" for e in events
+        )

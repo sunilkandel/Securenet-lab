@@ -84,6 +84,12 @@ CREATE TABLE IF NOT EXISTS ip_info (
     risk_score  REAL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS collector_offsets (
+    path       TEXT PRIMARY KEY,
+    offset     INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_ip ON events (source_ip);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events (event_type);
 CREATE INDEX IF NOT EXISTS idx_events_time ON events (timestamp);
@@ -383,6 +389,27 @@ class Database:
             last_seen=r["last_seen"],
             event_count=r["event_count"],
             risk_score=r["risk_score"],
+        )
+
+    # -- collector offsets ----------------------------------------------------
+
+    def get_offset(self, path: str) -> int | None:
+        """Bytes of remote log *path* already read, or None if never read."""
+        rows = self._query(
+            "SELECT offset FROM collector_offsets WHERE path = ?", (path,)
+        )
+        return int(rows[0]["offset"]) if rows else None
+
+    def set_offset(self, path: str, offset: int) -> None:
+        self._execute(
+            """
+            INSERT INTO collector_offsets (path, offset, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(path) DO UPDATE SET
+                offset     = excluded.offset,
+                updated_at = excluded.updated_at
+            """,
+            (path, int(offset)),
         )
 
     # -- dashboard stats ------------------------------------------------------

@@ -160,3 +160,10 @@ def test_top_attackers_worst_severity_is_ranked(db):
     db.insert_event(make_event("7.7.7.7", severity=Severity.HIGH))
     worst = {t["ip"]: t["worst_severity"] for t in db.top_attackers(5)}
     assert worst == {"6.6.6.6": "critical", "7.7.7.7": "high"}
+
+
+def test_collector_offsets_round_trip(db):
+    assert db.get_offset("/var/log/secure") is None
+    db.set_offset("/var/log/secure", 120)
+    db.set_offset("/var/log/secure", 480)
+    assert db.get_offset("/var/log/secure") == 480

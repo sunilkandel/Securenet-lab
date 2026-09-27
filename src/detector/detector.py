@@ -22,6 +22,8 @@ import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from datetime import timezone
+from urllib.parse import unquote_plus
 
 from src.collector.collector import LogRecord
 from src.config import settings
@@ -123,6 +125,9 @@ class _IpState:
     traversal_hits: deque = field(default_factory=deque)
     ports_seen: dict[float, set] = field(default_factory=dict)  # ts -> ports
     users_tried: set = field(default_factory=set)
+    # source port -> ts of an "Invalid user" line whose attempt was counted
+    # but whose first "Failed password for invalid user" has not arrived yet
+    invalid_conns: dict[int, float] = field(default_factory=dict)
     paths_404: set = field(default_factory=set)
     last_alert: dict[str, float] = field(default_factory=dict)  # type -> ts
 
@@ -183,6 +188,13 @@ class Detector:
             events.extend(self._process_apache(record, st, now, window_start))
         elif record.kind == "suricata":
             events.extend(self._process_suricata(record, now))
+
+        # Stamp events with when the attack happened, not when we read it:
+        # a backlog or a delayed poll must not shift the timeline.
+        if record.timestamp is not None:
+            when = record.timestamp.astimezone(timezone.utc).isoformat()
+            for event in events:
+                event.timestamp = when
         return events
 
     def process_many(self, records: list[LogRecord]) -> list[Event]:
@@ -198,12 +210,27 @@ class Detector:
     ) -> list[Event]:
         events: list[Event] = []
 
-        if record.action in ("failed", "invalid_user"):
+        # sshd logs one attempt with an unknown username twice: "Invalid
+        # user X" when the connection opens, then "Failed password for
+        # invalid user X". Count the first line (it is the only one when
+        # passwords are disabled) and skip its paired failure, matched by
+        # the connection's source port. Later failures on that connection
+        # are further guesses and count normally.
+        count = record.action in ("failed", "invalid_user")
+        if record.action == "invalid_user" and record.port:
+            st.invalid_conns[record.port] = now
+        elif record.action == "failed" and record.port in st.invalid_conns:
+            del st.invalid_conns[record.port]
+            count = False
+        if count:
             st.ssh_failures.append(now)
-            if record.user:
-                st.users_tried.add(record.user)
+        if record.action in ("failed", "invalid_user") and record.user:
+            st.users_tried.add(record.user)
 
         _prune(st.ssh_failures, window_start)
+        st.invalid_conns = {
+            p: ts for p, ts in st.invalid_conns.items() if ts >= window_start
+        }
 
         if len(st.ssh_failures) >= self.brute_force_threshold:
             if self._can_alert(st, EventType.SSH_BRUTE_FORCE, now):
@@ -234,9 +261,13 @@ class Detector:
     ) -> list[Event]:
         events: list[Event] = []
         path = record.path or ""
+        # Scanners URL-encode payloads ("union%20select", "union+select",
+        # "%252e%252e%252f"): match the raw path and up to two decodings.
+        once = unquote_plus(path)
+        variants = (path, once, unquote_plus(once))
 
         # Signature checks run on every request, no threshold needed.
-        if self._matches_any(_SQLI_PATTERNS, path):
+        if self._matches_any(_SQLI_PATTERNS, variants):
             if self._can_alert(st, EventType.SQL_INJECTION, now):
                 events.append(Event(
                     source_ip=record.source_ip,
@@ -247,7 +278,7 @@ class Detector:
                     details={"path": path, "method": record.method},
                 ))
 
-        if self._matches_any(_TRAVERSAL_PATTERNS, path):
+        if self._matches_any(_TRAVERSAL_PATTERNS, variants):
             if self._can_alert(st, EventType.DIRECTORY_TRAVERSAL, now):
                 events.append(Event(
                     source_ip=record.source_ip,
@@ -270,7 +301,7 @@ class Detector:
                     details={"user_agent": record.user_agent},
                 ))
 
-        lower_path = path.lower()
+        lower_path = once.lower()
         if any(lower_path.startswith(p) for p in _SENSITIVE_PATHS):
             if self._can_alert(st, EventType.WEB_ENUMERATION, now):
                 events.append(Event(
@@ -397,8 +428,8 @@ class Detector:
     # -- helpers -----------------------------------------------------------------
 
     @staticmethod
-    def _matches_any(patterns: list[re.Pattern], text: str) -> bool:
-        return any(p.search(text) for p in patterns)
+    def _matches_any(patterns: list[re.Pattern], texts: tuple[str, ...]) -> bool:
+        return any(p.search(t) for p in patterns for t in texts)
 
     def _can_alert(
         self,
