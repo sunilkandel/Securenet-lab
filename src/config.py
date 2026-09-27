@@ -80,6 +80,7 @@ class Settings:
     sshd_log_path: str = "/var/log/secure"
     mail_log_path: str = "/var/log/maillog"
     collect_interval: int = 10          # seconds between collection cycles
+    log_read_helper: str = ""           # root-owned reader run via sudo -n (see setup_target.sh)
 
     # -- Detection thresholds -------------------------------------------------
     brute_force_threshold: int = 5      # failed SSH attempts before alert
@@ -132,8 +133,12 @@ class Settings:
 def load_settings(env_file: str | Path | None = None) -> Settings:
     """Load environment variables from *env_file* and return a Settings instance.
 
-    If *env_file* is None, python-dotenv searches upward for config.env / .env.
+    If *env_file* is None, SECURENET_CONFIG (a path) is used when set;
+    otherwise config.env in the project root, then python-dotenv's usual
+    upward search for a .env file.
     """
+    if env_file is None and os.environ.get("SECURENET_CONFIG"):
+        env_file = os.environ["SECURENET_CONFIG"]
     if env_file is None:
         env_path = _PROJECT_ROOT / "config.env"
         if env_path.exists():
@@ -156,6 +161,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         sshd_log_path=_env("SSHD_LOG_PATH", "/var/log/secure"),
         mail_log_path=_env("MAIL_LOG_PATH", "/var/log/maillog"),
         collect_interval=_env_int("COLLECT_INTERVAL", 10),
+        log_read_helper=_env("LOG_READ_HELPER", ""),
 
         # -- Detection thresholds
         brute_force_threshold=_env_int("BRUTE_FORCE_THRESHOLD", 5),
@@ -181,6 +187,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         # -- Alerts — Telegram
         telegram_bot_token=_env("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=_env("TELEGRAM_CHAT_ID", ""),
+        alert_cooldown=_env_int("ALERT_COOLDOWN", 300),
 
         # -- Alerts — Email
         smtp_host=_env("SMTP_HOST", ""),

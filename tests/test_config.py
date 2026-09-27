@@ -20,6 +20,7 @@ _ENV_KEYS = [
     "SMTP_HOST", "SMTP_PORT", "ALERT_FROM", "ALERT_TO",
     "API_HOST", "API_PORT", "API_DEBUG",
     "LOG_LEVEL", "LOG_FORMAT", "LOG_FILE_ENABLED",
+    "ALERT_COOLDOWN",
 ]
 
 
@@ -243,3 +244,14 @@ class TestSingleton:
         from src.config import Settings, settings
 
         assert isinstance(settings, Settings)
+
+
+
+def test_alert_cooldown_is_configurable(tmp_path):
+    """ALERT_COOLDOWN used to be silently ignored (always 300)."""
+    from src.config import load_settings
+    for value, expected in (("42", 42), ("0", 0)):
+        os.environ.pop("ALERT_COOLDOWN", None)
+        env = tmp_path / f"cooldown_{value}.env"
+        env.write_text(f"ALERT_COOLDOWN={value}\n")
+        assert load_settings(env).alert_cooldown == expected

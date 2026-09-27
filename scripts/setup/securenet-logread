@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# securenet-logread - read-only access to the logs SecureNet Lab monitors.
+#
+# Installed by setup_target.sh as root:root 0755 in /usr/local/sbin, and the
+# monitor's SSH user may run it through sudo. It can only report the size of,
+# or read from, files listed one per line in /etc/securenet/logread.allow.
+#
+#   securenet-logread size PATH
+#   securenet-logread read PATH OFFSET
+set -euo pipefail
+
+ALLOW_FILE=/etc/securenet/logread.allow
+
+die() {
+  echo "securenet-logread: $*" >&2
+  exit 2
+}
+
+[ "$#" -ge 2 ] || die "usage: securenet-logread size PATH | read PATH OFFSET"
+action=$1
+path=$2
+[ -r "$ALLOW_FILE" ] || die "missing $ALLOW_FILE"
+grep -qxF -- "$path" "$ALLOW_FILE" || die "path not allowed: $path"
+
+case "$action" in
+  size)
+    [ "$#" -eq 2 ] || die "size takes only a PATH"
+    stat -c %s -- "$path" 2>/dev/null || echo 0
+    ;;
+  read)
+    [ "$#" -eq 3 ] || die "read needs PATH and OFFSET"
+    offset=$3
+    [[ "$offset" =~ ^[0-9]{1,15}$ ]] || die "bad offset: $offset"
+    # 10# stops a leading zero being read as octal; tail -c +N is 1-indexed
+    exec tail -c "+$((10#$offset + 1))" -- "$path"
+    ;;
+  *)
+    die "unknown action: $action"
+    ;;
+esac

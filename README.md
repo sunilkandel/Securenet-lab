@@ -12,27 +12,27 @@ A self-hosted network security monitoring system with IDS, threat intelligence, 
 - Generates weekly statistical reports using R
 
 ## Architecture
-[Kali Attacker VM] ──attack──▶ [Rocky Linux Target VM]<br>
-│<br>
-logs pulled<br>
-│<br>
-▼<br>
-[Ubuntu Monitor VM]<br>
-┌─────────────────────┐<br>
-│  Python Pipeline    │<br>
-│  - Log Collector    │<br>
-│  - Attack Detector  │<br>
-│  - Threat Intel     │<br>
-│  - Auto-Ban         │<br>
-│  - Alert System     │<br>
-└─────────────────────┘<br>
-│<br>
-┌─────────────────────┐<br>
-│  Java Dashboard     │<br>
-│  R Analysis Reports │<br>
-└─────────────────────┘<br>
 
+```
+ [Kali attacker] --- attacks ---> [Rocky Linux target]
+                                   Apache, sshd, Suricata IDS, firewalld
+                                        ^                  |
+                  bans: firewall-cmd    |                  | logs + Suricata eve.json,
+                  over SSH              |                  | read over SSH
+                                        |                  v
+                                  [Ubuntu monitor]
+                                   Python pipeline:
+                                   collector -> detector -> threat intel
+                                   -> auto-ban -> alerts (Telegram / email)
+                                   SQLite, REST API + web dashboard (:8000),
+                                   weekly R report
+                                        |
+                                        v
+                                  Java/JavaFX desktop dashboard
+```
 
+Components, data flow, detection rules, security model and every setting:
+[docs/architecture.md](docs/architecture.md).
 
 ## Tech Stack
 
@@ -44,6 +44,7 @@ logs pulled<br>
 | Threat Intelligence | AbuseIPDB API |
 | Alerting | Telegram Bot API |
 | Dashboard | Java 21 + JavaFX + Maven |
+| REST API / web dashboard | FastAPI + uvicorn + Chart.js |
 | Analysis | R + ggplot2 |
 | Firewall Automation | Python + firewalld + UFW |
 
@@ -58,31 +59,45 @@ logs pulled<br>
 
 ### Quick Start
 
-1. Clone the repo
+1. Clone the repo on the monitor VM, and put a copy on the target VM too
 ```bash
-   git clone https://github.com/YOUR_USERNAME/securenet-lab.git
-   cd securenet-lab
+git clone https://github.com/sunilkandel/Securenet-lab.git
+cd Securenet-lab
 ```
 
-2. Copy and fill in your config
+2. Target VM (Rocky Linux), as root: web server, firewall, Suricata, and
+   read-only log access for the account the monitor logs in as
 ```bash
-   cp config.env.example config.env
-   nano config.env
+sudo bash scripts/setup/setup_target.sh --user <ssh-user>
 ```
 
-3. Install Python dependencies
+3. Monitor VM (Ubuntu), as your normal user: Python environment, config,
+   SSH key and a self-test. `--with-r` adds the weekly R report, `--systemd`
+   runs the pipeline and API as services.
 ```bash
-   pip3 install -r requirements.txt
+bash scripts/setup/setup_monitor.sh --with-r
+ssh-copy-id -i ~/.ssh/securenet_ed25519.pub <ssh-user>@<target-ip>
+nano config.env   # both setup scripts print the values to set
 ```
 
-4. Run the setup script on Monitor VM
+4. Check one cycle, then run the pipeline and the API
 ```bash
-   bash scripts/setup/setup_monitor.sh
+.venv/bin/python -m src.orchestrator.main --once
+.venv/bin/python -m src.orchestrator.main
+.venv/bin/uvicorn src.api.server:app --host 0.0.0.0 --port 8000
+```
+Web dashboard: `http://<monitor-ip>:8000/`
+
+5. Desktop dashboard (any machine with Java 21 + Maven) and the report
+```bash
+cd dashboard && SECURENET_API_URL=http://<monitor-ip>:8000 mvn clean javafx:run
+Rscript analysis/scripts/attack_analysis.R   # writes analysis/reports/<date>/report.md
 ```
 
-5. Start the pipeline
+6. Tests
 ```bash
-   python3 src/orchestrator/main.py
+.venv/bin/python -m pytest -q
+.venv/bin/python scripts/smoke_test.py
 ```
 
 ## Project Status
@@ -94,9 +109,15 @@ logs pulled<br>
 - [x] Phase 4 — Threat Intelligence + Auto-Ban
 - [x] Phase 5 — Alert System
 - [x] Phase 6 — Java Dashboard
-- [ ] Phase 7 — R Analysis
-- [ ] Phase 8 — Integration
+- [x] Phase 7 — R Analysis
+- [x] Phase 8 — Integration
 
+
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md): components, data flow, detection, security model, configuration
+- [suricata/config/README.md](suricata/config/README.md): Suricata on the target, rule notes, Kali test commands
+- [dashboard/README.md](dashboard/README.md): the Java desktop dashboard
 
 ## Author
 
