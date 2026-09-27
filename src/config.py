@@ -87,6 +87,10 @@ class Settings:
     web_enum_threshold: int = 10        # 404 responses before alert
     detection_window: int = 300         # seconds — sliding window for counts
 
+    # -- Suricata IDS (runs on the target VM) ---------------------------------
+    suricata_enabled: bool = True
+    suricata_eve_path: str = "/var/log/suricata/eve.json"
+
     # -- Threat intelligence (AbuseIPDB) --------------------------------------
     abuseipdb_api_key: str = ""
     abuseipdb_cache_ttl: int = 3600     # seconds — re-check IPs after this
@@ -157,6 +161,10 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         port_scan_threshold=_env_int("PORT_SCAN_THRESHOLD", 20),
         web_enum_threshold=_env_int("WEB_ENUM_THRESHOLD", 10),
         detection_window=_env_int("DETECTION_WINDOW", 300),
+
+        # -- Suricata IDS
+        suricata_enabled=_env_bool("SURICATA_ENABLED", True),
+        suricata_eve_path=_env("SURICATA_EVE_PATH", "/var/log/suricata/eve.json"),
 
         # -- Threat intelligence
         abuseipdb_api_key=_env("ABUSEIPDB_API_KEY", ""),

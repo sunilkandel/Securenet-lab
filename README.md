@@ -88,9 +88,9 @@ logs pulled<br>
 ## Project Status
 
 - [x] Phase 0 — Lab Setup
-- [ ] Phase 1 — Log Collection
-- [ ] Phase 2 — Attack Detection
-- [ ] Phase 3 — Suricata IDS
+- [x] Phase 1 — Log Collection
+- [x] Phase 2 — Attack Detection
+- [x] Phase 3 — Suricata IDS
 - [ ] Phase 4 — Threat Intelligence + Auto-Ban
 - [ ] Phase 5 — Alert System
 - [ ] Phase 6 — Java Dashboard
