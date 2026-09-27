@@ -43,6 +43,7 @@ class Severity(str, Enum):
 class EventType(str, Enum):
     """All recognised event types produced by detectors."""
     SSH_BRUTE_FORCE = "ssh_brute_force"
+    MAIL_BRUTE_FORCE = "mail_brute_force"  # SMTP AUTH / IMAP / POP3 guessing
     PORT_SCAN = "port_scan"
     WEB_ENUMERATION = "web_enumeration"
     SUSPICIOUS_USER_AGENT = "suspicious_user_agent"

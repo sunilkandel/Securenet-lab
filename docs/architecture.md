@@ -37,7 +37,7 @@ The Java dashboard runs anywhere that can reach the monitor's API.
 |---|---|---|
 | Config | `src/config.py` | One typed `Settings` object from `config.env` (or `SECURENET_CONFIG`). |
 | Models / storage | `src/models.py`, `src/storage.py` | Event, Ban, Alert, ThreatIntel records; SQLite persistence. |
-| Collector | `src/collector/collector.py` | Tails the target's logs over SSH by byte offset; pure parsers for Apache, sshd and Suricata EVE lines. |
+| Collector | `src/collector/collector.py` | Tails the target's logs over SSH by byte offset; pure parsers for Apache, sshd, maillog (Postfix/Dovecot) and Suricata EVE lines. |
 | Detector | `src/detector/detector.py` | Per-IP sliding windows and signatures turn log records into events. |
 | Threat intel | `src/threat_intel/threat_intel.py` | AbuseIPDB lookups with a SQLite cache. |
 | Auto-ban | `src/auto_ban/auto_ban.py` | firewalld or ufw rules on the target over SSH; expiry sweep. |
@@ -73,6 +73,7 @@ The Java dashboard runs anywhere that can reach the monitor's API.
 | Event type | Source | Trigger | MITRE |
 |---|---|---|---|
 | `ssh_brute_force` | sshd log, Suricata 9000001 | `BRUTE_FORCE_THRESHOLD` failures in the window (critical at 4x) | T1110 |
+| `mail_brute_force` | maillog: Postfix SMTP AUTH, Dovecot IMAP/POP3 | `BRUTE_FORCE_THRESHOLD` failed logins in the window, counted apart from SSH (critical at 4x) | T1110 |
 | `port_scan` | Suricata flows, 9000002-9000004 | `PORT_SCAN_THRESHOLD` distinct ports in the window; SYN/NULL/XMAS scans | T1046 |
 | `web_enumeration` | Apache log, Suricata 9000030-32 | `WEB_ENUM_THRESHOLD` 404s in the window, or a sensitive path (`/.env`, `/.git`, `/wp-login.php` ...) | T1595.003 |
 | `sql_injection` | Apache log, Suricata 9000010-11 | SQLi patterns in the path | T1190 |
@@ -134,7 +135,7 @@ test results.
 | `SSH_USER`, `SSH_PORT`, `SSH_KEY_PATH` | -, `22`, - | Login to the target |
 | `APACHE_LOG_PATH` | `/var/log/httpd/access_log` | |
 | `SSHD_LOG_PATH` | `/var/log/secure` | |
-| `MAIL_LOG_PATH` | `/var/log/maillog` | |
+| `MAIL_LOG_PATH` | `/var/log/maillog` | Read when present; stays empty unless the target runs a mail server |
 | `COLLECT_INTERVAL` | `10` | Seconds between cycles |
 | `LOG_READ_HELPER` | empty | `/usr/local/sbin/securenet-logread` after `setup_target.sh`; empty = read directly |
 | `BRUTE_FORCE_THRESHOLD` | `5` | Failed SSH logins per window |

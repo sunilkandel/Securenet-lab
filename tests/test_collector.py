@@ -14,6 +14,7 @@ from src.collector.collector import (
     _parser_for,
     parse_apache_line,
     parse_eve_line,
+    parse_mail_line,
     parse_sshd_line,
 )
 
@@ -219,6 +220,8 @@ class TestParserRouting:
         assert _parser_for("/var/log/httpd/access_log") is parse_apache_line
         assert _parser_for("/var/log/apache2/other.log") is parse_apache_line
         assert _parser_for("/var/log/secure") is parse_sshd_line
+        assert _parser_for("/var/log/maillog") is parse_mail_line
+        assert _parser_for("/var/log/mail.log") is parse_mail_line
 
 
 class TestHostileInput:
@@ -446,3 +449,54 @@ class TestRestart:
         again.files[0].start_at_end = True
         assert [r.source_ip for r in again.poll()] == ["9.9.9.9"]
         db.close()
+
+
+class TestMailParser:
+    POSTFIX = ("Oct 11 22:14:15 srv postfix/smtpd[99]: warning: unknown[1.2.3.4]: "
+               "SASL LOGIN authentication failed: UGFzc3dvcmQ6")
+    DOVECOT = ("Oct 11 22:14:15 srv dovecot[88]: imap-login: Disconnected (auth failed, "
+               "3 attempts in 12 secs): user=<bob>, method=PLAIN, rip=5.6.7.8, "
+               "lip=10.0.0.2, session=<abc>")
+
+    def test_postfix_sasl_failure(self):
+        rec = parse_mail_line(self.POSTFIX)
+        assert (rec.kind, rec.source_ip, rec.service, rec.action, rec.attempts) == (
+            "mail", "1.2.3.4", "smtp", "failed", 1)
+
+    def test_dovecot_failure_counts_reported_attempts(self):
+        rec = parse_mail_line(self.DOVECOT)
+        assert (rec.source_ip, rec.service, rec.user, rec.attempts) == (
+            "5.6.7.8", "imap", "bob", 3)
+
+    def test_dovecot_without_pid_and_newer_format(self):
+        rec = parse_mail_line(
+            "Oct 11 22:14:15 srv dovecot: pop3-login: Login aborted: Connection closed "
+            "(auth failed, 1 attempts in 2 secs) (auth_failed): user=<x>, "
+            "method=PLAIN, rip=2001:db8::1, lip=::1")
+        assert (rec.source_ip, rec.service) == ("2001:db8::1", "pop3")
+
+    def test_attempts_per_line_are_capped(self):
+        rec = parse_mail_line(self.DOVECOT.replace("3 attempts", "100000 attempts"))
+        assert rec.attempts == 50
+
+    def test_ignores_non_failures(self):
+        for line in [
+            "Oct 11 22:14:15 srv postfix/smtpd[99]: connect from unknown[1.2.3.4]",
+            "Oct 11 22:14:15 srv dovecot[88]: imap-login: Login: user=<bob>, "
+            "method=PLAIN, rip=5.6.7.8, lip=10.0.0.2",
+            "Oct 11 22:14:15 srv sshd[1]: Failed password for root from 1.2.3.4 port 1 ssh2",
+            "garbage",
+        ]:
+            assert parse_mail_line(line) is None
+
+    def test_username_cannot_inject_source_ip(self):
+        rec = parse_mail_line(self.DOVECOT.replace("user=<bob>", "user=<a, rip=9.9.9.9>"))
+        assert rec.source_ip == "5.6.7.8"
+
+    def test_rdns_name_cannot_inject_source_ip(self):
+        rec = parse_mail_line(self.POSTFIX.replace("unknown[1.2.3.4]",
+                                                   "evil[9.9.9.9].example[1.2.3.4]"))
+        assert rec is None or rec.source_ip == "1.2.3.4"
+
+    def test_non_ip_address_is_dropped(self):
+        assert parse_mail_line(self.DOVECOT.replace("rip=5.6.7.8", "rip=...")) is None

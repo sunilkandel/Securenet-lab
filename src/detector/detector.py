@@ -120,6 +120,9 @@ _IDS_SEVERITY = {1: Severity.HIGH, 2: Severity.MEDIUM, 3: Severity.LOW}
 class _IpState:
     """Per-IP sliding-window state."""
     ssh_failures: deque = field(default_factory=deque)   # timestamps
+    mail_failures: deque = field(default_factory=deque)  # one ts per attempt
+    mail_users: set = field(default_factory=set)
+    mail_services: set = field(default_factory=set)
     web_404s: deque = field(default_factory=deque)       # timestamps
     sqli_hits: deque = field(default_factory=deque)
     traversal_hits: deque = field(default_factory=deque)
@@ -184,6 +187,8 @@ class Detector:
         events: list[Event] = []
         if record.kind == "sshd":
             events.extend(self._process_sshd(record, st, now, window_start))
+        elif record.kind == "mail":
+            events.extend(self._process_mail(record, st, now, window_start))
         elif record.kind == "apache":
             events.extend(self._process_apache(record, st, now, window_start))
         elif record.kind == "suricata":
@@ -250,6 +255,44 @@ class Detector:
                         "attempts": len(st.ssh_failures),
                         "window_seconds": self.window,
                         "users_tried": users,
+                    },
+                ))
+        return events
+
+    # -- mail (Postfix SMTP AUTH, Dovecot IMAP/POP3) ---------------------------
+
+    def _process_mail(
+        self, record: LogRecord, st: _IpState, now: float, window_start: float
+    ) -> list[Event]:
+        """Password guessing against the mail server: same threshold and
+        window as SSH, counted separately so the two do not mix."""
+        events: list[Event] = []
+        if record.action == "failed":
+            st.mail_failures.extend([now] * max(record.attempts, 1))
+            if record.user and len(st.mail_users) < 100:  # cap memory per IP
+                st.mail_users.add(record.user)
+            if record.service:
+                st.mail_services.add(record.service)
+        _prune(st.mail_failures, window_start)
+
+        if len(st.mail_failures) >= self.brute_force_threshold:
+            if self._can_alert(st, EventType.MAIL_BRUTE_FORCE, now):
+                severity = (
+                    Severity.CRITICAL
+                    if len(st.mail_failures) >= self.brute_force_threshold * 4
+                    else Severity.HIGH
+                )
+                events.append(Event(
+                    source_ip=record.source_ip,
+                    event_type=EventType.MAIL_BRUTE_FORCE,
+                    severity=severity,
+                    raw_log=record.raw,
+                    mitre_technique="T1110",
+                    details={
+                        "attempts": len(st.mail_failures),
+                        "window_seconds": self.window,
+                        "services": sorted(st.mail_services),
+                        "users_tried": sorted(st.mail_users)[:10],
                     },
                 ))
         return events

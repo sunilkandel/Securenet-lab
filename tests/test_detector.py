@@ -250,6 +250,15 @@ def sshd(ip: str, action: str, port: int, offset_s: int = 0,
     )
 
 
+def mail_fail(ip: str, attempts: int = 1, offset_s: int = 0,
+              service: str = "imap") -> LogRecord:
+    return LogRecord(
+        kind="mail", source_ip=ip, user="bob", action="failed",
+        attempts=attempts, service=service,
+        timestamp=datetime(2026, 10, 11, 10, 0, 0) + timedelta(seconds=offset_s),
+    )
+
+
 class TestInvalidUserCounting:
     def detector(self):
         return Detector(brute_force_threshold=5, window=300, alert_cooldown=0)
@@ -301,3 +310,35 @@ class TestEventTime:
         assert events and all(
             e.timestamp == "2020-01-02T03:04:05+00:00" for e in events
         )
+
+
+class TestMailBruteForce:
+    def make(self):
+        return Detector(brute_force_threshold=5, window=300, alert_cooldown=300)
+
+    def test_fires_at_threshold(self):
+        d, events = self.make(), []
+        for i in range(5):
+            events += d.process(mail_fail("4.4.4.4", offset_s=i, service="smtp"))
+        assert [e.event_type for e in events] == [EventType.MAIL_BRUTE_FORCE]
+        assert events[0].mitre_technique == "T1110"
+        assert events[0].details["services"] == ["smtp"]
+
+    def test_multi_attempt_line_counts_each_attempt(self):
+        d = self.make()
+        assert d.process(mail_fail("4.4.4.4", attempts=4)) == []
+        events = d.process(mail_fail("4.4.4.4", attempts=1, offset_s=1))
+        assert events[0].details["attempts"] == 5
+
+    def test_outside_window_is_forgotten(self):
+        d, events = self.make(), []
+        for i in range(5):
+            events += d.process(mail_fail("4.4.4.4", offset_s=i * 100))
+        assert events == []
+
+    def test_mail_and_ssh_counted_separately(self):
+        d, events = self.make(), []
+        for i in range(3):
+            events += d.process(mail_fail("4.4.4.4", offset_s=i))
+            events += d.process(ssh_fail("4.4.4.4", offset_s=i))
+        assert events == []
