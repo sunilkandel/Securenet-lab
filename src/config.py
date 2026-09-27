@@ -100,6 +100,7 @@ class Settings:
     auto_ban_enabled: bool = True
     ban_duration: int = 3600            # seconds — 0 = permanent
     firewall_backend: str = "firewalld" # "firewalld" or "ufw"
+    never_ban: str = ""                 # comma-separated IPs/CIDRs, never banned
 
     # -- Alerts (Telegram) ----------------------------------------------------
     telegram_bot_token: str = ""
@@ -175,6 +176,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         auto_ban_enabled=_env_bool("AUTO_BAN_ENABLED", True),
         ban_duration=_env_int("BAN_DURATION", 3600),
         firewall_backend=_env("FIREWALL_BACKEND", "firewalld"),
+        never_ban=_env("NEVER_BAN", ""),
 
         # -- Alerts — Telegram
         telegram_bot_token=_env("TELEGRAM_BOT_TOKEN", ""),
