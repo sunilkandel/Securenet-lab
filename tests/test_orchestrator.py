@@ -124,3 +124,19 @@ def test_no_records_is_a_clean_cycle(db):
     pipeline = build_pipeline(db, [])
     stats = pipeline.run_once()
     assert stats == {"collected": 0, "events": 0, "bans": 0, "alerts": 0}
+
+def test_failed_cycle_does_not_stop_the_loop(db, monkeypatch):
+    pipeline = build_pipeline(db, [])
+    calls = []
+
+    def flaky_run_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        pipeline._stop = True
+        return {"collected": 0, "events": 0, "bans": 0, "alerts": 0}
+
+    pipeline.run_once = flaky_run_once
+    monkeypatch.setattr("src.orchestrator.main.time.sleep", lambda s: None)
+    pipeline.run()
+    assert len(calls) == 2

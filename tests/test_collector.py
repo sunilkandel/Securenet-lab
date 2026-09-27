@@ -8,6 +8,7 @@ raising.
 """
 
 import json
+from datetime import timezone
 
 from src.collector.collector import (
     _parser_for,
@@ -273,6 +274,7 @@ class TestHostileInput:
 import shlex as _shlex  # noqa: E402
 
 from src.collector.collector import SSHLogCollector  # noqa: E402
+from src.storage import Database  # noqa: E402
 
 
 class _Stream:
@@ -335,9 +337,10 @@ SSH1 = b"Oct 11 22:14:15 srv sshd[1]: Failed password for root from 1.2.3.4 port
 SSH2 = b"Oct 11 22:14:16 srv sshd[1]: Failed password for root from 5.6.7.8 port 22 ssh2\n"
 
 
-def make_collector(target, helper=""):
-    col = SSHLogCollector(host="t", user="u", log_paths=["/var/log/secure"],
-                          read_helper=helper)
+def make_collector(target, helper="", db=None, paths=None):
+    col = SSHLogCollector(host="t", user="u",
+                          log_paths=paths or ["/var/log/secure"],
+                          read_helper=helper, db=db)
     col._client = target
     return col
 
@@ -390,3 +393,56 @@ class TestTransport:
         assert t.commands[0] == "sudo -n /usr/local/sbin/securenet-logread size /var/log/secure"
         assert t.commands[1].startswith(
             "sudo -n /usr/local/sbin/securenet-logread read /var/log/secure 0 | head -c ")
+
+
+class TestTimestampsAndPorts:
+    def test_apache_timestamp_keeps_its_offset(self):
+        rec = parse_apache_line(
+            '1.2.3.4 - - [10/Oct/2026:13:55:36 -0700] "GET / HTTP/1.1" 200 1 "-" "x"'
+        )
+        assert rec.timestamp.utcoffset().total_seconds() == -7 * 3600
+        assert rec.timestamp.astimezone(timezone.utc).hour == 20
+
+    def test_sshd_source_port_parsed(self):
+        rec = parse_sshd_line(
+            "Oct 11 22:14:17 srv sshd[1]: Invalid user oracle from 10.0.0.9 port 51237"
+        )
+        assert rec.port == 51237
+
+
+class TestRestart:
+    """Read offsets survive a restart when the collector has a database."""
+
+    def test_restart_does_not_replay_the_log(self, tmp_path):
+        db = Database(tmp_path / "c.db")
+        t = FakeTarget(); t.files["/var/log/secure"] = SSH1
+        first = make_collector(t, db=db)
+        assert [r.source_ip for r in first.poll()] == ["1.2.3.4"]
+
+        t.files["/var/log/secure"] += SSH2
+        second = make_collector(t, db=db)           # process restarted
+        assert [r.source_ip for r in second.poll()] == ["5.6.7.8"]
+        db.close()
+
+    def test_restart_after_rotation_reads_new_file(self, tmp_path):
+        db = Database(tmp_path / "c.db")
+        t = FakeTarget(); t.files["/var/log/secure"] = SSH1 + SSH2
+        assert len(make_collector(t, db=db).poll()) == 2
+        t.files["/var/log/secure"] = SSH1           # rotated while stopped
+        assert [r.source_ip for r in make_collector(t, db=db).poll()] == ["1.2.3.4"]
+        db.close()
+
+    def test_eve_resumes_instead_of_skipping_to_end(self, tmp_path):
+        db = Database(tmp_path / "c.db")
+        eve = "/var/log/suricata/eve.json"
+        flow = (json.dumps({"event_type": "flow", "src_ip": "9.9.9.9",
+                            "dest_port": 22}) + "\n").encode()
+        t = FakeTarget(); t.files[eve] = flow
+        col = make_collector(t, db=db, paths=[eve])
+        col.files[0].start_at_end = True
+        assert col.poll() == []                     # history skipped once
+        t.files[eve] += flow                        # arrives while stopped
+        again = make_collector(t, db=db, paths=[eve])
+        again.files[0].start_at_end = True
+        assert [r.source_ip for r in again.poll()] == ["9.9.9.9"]
+        db.close()

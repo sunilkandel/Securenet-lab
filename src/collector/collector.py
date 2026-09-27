@@ -15,6 +15,9 @@ Two layers, kept apart on purpose:
 A note on offsets: we track how many bytes of each remote file we have
 already read and start the next read there. If the file shrinks (log
 rotation), we assume it was replaced and read the new file from the top.
+Given a Database, offsets are saved after every read and restored on
+start, so a restart resumes where it stopped instead of replaying the
+whole log (duplicate events, alerts and bans).
 """
 
 from __future__ import annotations
@@ -25,11 +28,14 @@ import re
 import shlex
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Callable, Iterator
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Callable, Iterator
 
 from src.config import settings
 from src.logging_setup import get_logger
+
+if TYPE_CHECKING:
+    from src.storage import Database
 
 log = get_logger(__name__)
 
@@ -61,6 +67,7 @@ class LogRecord:
     # sshd
     user: str = ""
     action: str = ""          # "failed", "accepted", "invalid_user", ...
+    port: int = 0             # client source port: identifies one connection
     raw: str = ""
     # suricata (eve.json); action holds the EVE type: "alert" or "flow"
     dest_ip: str = ""
@@ -83,13 +90,22 @@ _MONTHS = {
 
 
 def _parse_apache_timestamp(raw: str) -> datetime | None:
-    """Parse '10/Oct/2000:13:55:36 -0700' (timezone ignored, local time)."""
+    """Parse '10/Oct/2000:13:55:36 -0700' into a tz-aware datetime.
+
+    Without a usable offset the result is naive (read as local time).
+    """
     try:
         date_part, time_part = raw.split(":", 1)
         day, mon, year = date_part.split("/")
-        hh, mm, ss = time_part.split(" ")[0].split(":")
+        clock, _, zone = time_part.partition(" ")
+        hh, mm, ss = clock.split(":")
+        tz = None
+        if re.fullmatch(r"[+-]\d{4}", zone):
+            minutes = int(zone[1:3]) * 60 + int(zone[3:5])
+            tz = timezone(timedelta(minutes=-minutes if zone[0] == "-" else minutes))
         return datetime(
-            int(year), _MONTHS[mon], int(day), int(hh), int(mm), int(ss)
+            int(year), _MONTHS[mon], int(day), int(hh), int(mm), int(ss),
+            tzinfo=tz,
         )
     except (ValueError, KeyError):
         return None
@@ -173,20 +189,22 @@ def _is_ip(value: str) -> bool:
 # sshd always ends these lines with " from <ip> port <n>" (plus " ssh2" on
 # auth results), after the username. Anchoring on that fixed tail is what
 # stops a username like "x from $(cmd)" from being read as the address.
-_SSHD_TAIL = re.compile(r" from (\S+) port \d+(?: ssh2)?$")
+_SSHD_TAIL = re.compile(r" from (\S+) port (\d+)(?: ssh2)?$")
 
 
-def _split_user_ip(rest: str) -> tuple[str, str]:
-    """Split '<user> from <ip> port <n> [ssh2]' into (user, ip)."""
+def _split_user_ip(rest: str) -> tuple[str, str, int]:
+    """Split '<user> from <ip> port <n> [ssh2]' into (user, ip, port)."""
     m = _SSHD_TAIL.search(rest)
     if m:
-        return rest[:m.start()], m.group(1)
+        return rest[:m.start()], m.group(1), int(m.group(2))
     if " from " in rest:
         # e.g. "Accepted publickey ... port 22 ssh2: RSA SHA256:..." or an
         # older sshd without the port: still take the LAST " from ".
         user, _, tail = rest.rpartition(" from ")
-        return user, tail.split(" ")[0]
-    return rest, ""
+        words = tail.split(" ")
+        has_port = len(words) > 2 and words[1] == "port" and words[2].isdigit()
+        return user, words[0], int(words[2]) if has_port else 0
+    return rest, "", 0
 
 
 def parse_sshd_line(line: str) -> LogRecord | None:
@@ -213,16 +231,16 @@ def parse_sshd_line(line: str) -> LogRecord | None:
 
     if msg.startswith("Failed password for invalid user "):
         action = "failed"
-        user, ip = _split_user_ip(msg[len("Failed password for invalid user "):])
+        user, ip, port = _split_user_ip(msg[len("Failed password for invalid user "):])
     elif msg.startswith("Failed password for "):
         action = "failed"
-        user, ip = _split_user_ip(msg[len("Failed password for "):])
+        user, ip, port = _split_user_ip(msg[len("Failed password for "):])
     elif msg.startswith(("Accepted password for ", "Accepted publickey for ")):
         action = "accepted"
-        user, ip = _split_user_ip(msg.split(" for ", 1)[1])
+        user, ip, port = _split_user_ip(msg.split(" for ", 1)[1])
     elif msg.startswith("Invalid user "):
         action = "invalid_user"
-        user, ip = _split_user_ip(msg[len("Invalid user "):])
+        user, ip, port = _split_user_ip(msg[len("Invalid user "):])
     else:
         return None  # disconnects, session open/close: noise for us
 
@@ -237,6 +255,7 @@ def parse_sshd_line(line: str) -> LogRecord | None:
         timestamp=timestamp,
         user=user,
         action=action,
+        port=port,
         raw=raw,
     )
 
@@ -346,7 +365,7 @@ class _RemoteFile:
     # Skip the file's existing contents on the first poll. Used for
     # eve.json, which is large and mostly old history when we connect.
     start_at_end: bool = False
-    primed: bool = False
+    primed: bool = False      # offset is known (read before, or restored)
 
 
 class SSHLogCollector:
@@ -364,6 +383,7 @@ class SSHLogCollector:
         port: int | None = None,
         log_paths: list[str] | None = None,
         read_helper: str | None = None,
+        db: "Database | None" = None,
     ) -> None:
         self.host = host or settings.target_ip
         self.user = user or settings.ssh_user
@@ -375,6 +395,15 @@ class SSHLogCollector:
             self.files.append(
                 _RemoteFile(settings.suricata_eve_path, start_at_end=True)
             )
+        self.db = db
+        if db is not None:
+            for f in self.files:
+                saved = db.get_offset(f.path)
+                if saved is not None:
+                    # resume where the last run stopped; a file that shrank
+                    # meanwhile is caught by the rotation check on read
+                    f.offset = saved
+                    f.primed = True
         self._client = None
         self._backoff = 5  # seconds; doubles on each failed reconnect
         self.read_helper = (
@@ -503,15 +532,14 @@ class SSHLogCollector:
         for f in self.files:
             try:
                 if f.start_at_end and not f.primed:
-                    f.offset = self._remote_size(f.path)
-                    f.primed = True
+                    self._advance(f, self._remote_size(f.path))
                     continue
                 text, new_offset = self._read_new_bytes(f.path, f.offset)
             except Exception as exc:
                 log.warning("read failed on %s: %s", f.path, exc)
                 self._client = None  # force reconnect next cycle
                 break
-            f.offset = new_offset
+            self._advance(f, new_offset)
             for line in text.splitlines():
                 line = line.strip()
                 if not line:
@@ -520,6 +548,15 @@ class SSHLogCollector:
                 if rec is not None:
                     records.append(rec)
         return records
+
+    def _advance(self, f: _RemoteFile, offset: int) -> None:
+        """Move *f* to *offset* and, with a database, remember it."""
+        if offset == f.offset and f.primed:
+            return
+        f.offset = offset
+        f.primed = True
+        if self.db is not None:
+            self.db.set_offset(f.path, offset)
 
     def collect_forever(
         self,
