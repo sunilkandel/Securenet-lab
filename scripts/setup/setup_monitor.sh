@@ -112,8 +112,7 @@ if [ "$SYSTEMD" -eq 1 ]; then
   log "systemd services"
   [ -d /run/systemd/system ] || die "--systemd needs a machine running systemd"
   write_unit securenet-pipeline "pipeline" "\"$REPO/.venv/bin/python\" -m src.orchestrator.main"
-  write_unit securenet-api "REST API" \
-    "\"$REPO/.venv/bin/uvicorn\" src.api.server:app --host 0.0.0.0 --port 8000"
+  write_unit securenet-api "REST API" "\"$REPO/.venv/bin/python\" -m src.api.server"
   sudo systemctl daemon-reload
   sudo systemctl enable --now securenet-pipeline securenet-api
   echo "status: systemctl status securenet-pipeline securenet-api"
@@ -139,7 +138,10 @@ Done. Next steps:
 1. On the target (Rocky), from a copy of this repo:
      sudo bash scripts/setup/setup_target.sh --user <ssh-user>
 
-2. Copy the key to the target:
+2. Copy the key to the target. The first connection shows the target's
+   host key fingerprint: check it (on the target: ssh-keygen -lf
+   /etc/ssh/ssh_host_ed25519_key.pub) before answering yes. The pipeline
+   only connects to hosts saved in ~/.ssh/known_hosts this way.
      ssh-copy-id -i $KEY.pub <ssh-user>@<target-ip>
 
 3. Edit config.env here:
@@ -160,6 +162,6 @@ else
 
 5. Run it:
      .venv/bin/python -m src.orchestrator.main
-     .venv/bin/uvicorn src.api.server:app --host 0.0.0.0 --port 8000
+     .venv/bin/python -m src.api.server
 EOF
 fi

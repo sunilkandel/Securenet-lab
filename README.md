@@ -40,7 +40,7 @@ Components, data flow, detection rules, security model and every setting:
 |---|---|
 | Infrastructure | VirtualBox, Rocky Linux, Ubuntu, Kali |
 | IDS | Suricata |
-| Log Pipeline | Python 3.12 |
+| Log Pipeline | Python 3.12+ (tested on 3.12 and 3.14) |
 | Threat Intelligence | AbuseIPDB API |
 | Alerting | Telegram Bot API |
 | Dashboard | Java 21 + JavaFX + Maven |
@@ -76,7 +76,7 @@ sudo bash scripts/setup/setup_target.sh --user <ssh-user>
    runs the pipeline and API as services.
 ```bash
 bash scripts/setup/setup_monitor.sh --with-r
-ssh-copy-id -i ~/.ssh/securenet_ed25519.pub <ssh-user>@<target-ip>
+ssh-copy-id -i ~/.ssh/securenet_ed25519.pub <ssh-user>@<target-ip>  # check and accept the host key fingerprint
 nano config.env   # both setup scripts print the values to set
 ```
 
@@ -84,7 +84,7 @@ nano config.env   # both setup scripts print the values to set
 ```bash
 .venv/bin/python -m src.orchestrator.main --once
 .venv/bin/python -m src.orchestrator.main
-.venv/bin/uvicorn src.api.server:app --host 0.0.0.0 --port 8000
+.venv/bin/python -m src.api.server   # listens on API_HOST:API_PORT (default 0.0.0.0:8000)
 ```
 Web dashboard: `http://<monitor-ip>:8000/`
 

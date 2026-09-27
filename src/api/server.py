@@ -13,8 +13,8 @@ writes to. Endpoints:
     GET /api/top-attackers   busiest source IPs
     GET /api/health          liveness probe
 
-Run standalone with:
-    uvicorn src.api.server:app --host 0.0.0.0 --port 8000
+Run standalone with (binds to API_HOST:API_PORT from config.env):
+    python -m src.api.server
 
 The dashboard is one HTML file embedded below on purpose: zero build
 tooling, zero npm, works offline. Chart.js loads from a CDN with a
@@ -128,3 +128,18 @@ def dashboard() -> HTMLResponse:
         "<h1>SecureNet Lab</h1><p>dashboard file missing; "
         "API still available at /api/stats</p>"
     )
+
+
+def main() -> None:
+    import uvicorn
+
+    uvicorn.run(
+        app,
+        host=settings.api_host,
+        port=settings.api_port,
+        log_level="debug" if settings.api_debug else "info",
+    )
+
+
+if __name__ == "__main__":
+    main()
